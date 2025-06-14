@@ -1,0 +1,541 @@
+import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
+from firebase_admin.exceptions import FirebaseError  # Generic Firebase error
+import uuid
+import datetime
+import re
+import json
+from pathlib import Path
+# This file provides Firebase authentication and user management for CarbonTally app
+# It replaces the SQL-based authentication with Firebase-only authentication
+
+# Configuration
+BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
+
+# Firebase initialization
+def initialize_firebase():
+    """Initialize Firebase Admin SDK if not already initialized"""
+    try:
+        if not firebase_admin._apps:
+            # Check if credentials file exists
+            cred_path = BASE_DIR / "firebase_credentials.json"
+            if not cred_path.exists():
+                st.error("Firebase credentials file not found. Please set up Firebase first.")
+                return False
+                
+            # Get Firebase credentials from Streamlit secrets or local file
+            # Prioritize secrets, then fall back to local file for direct runs/testing
+            try:
+                firebase_config = {
+                    "type": st.secrets["FIREBASE"]["TYPE"],
+                    "project_id": st.secrets["FIREBASE"]["PROJECT_ID"],
+                    "private_key_id": st.secrets["FIREBASE"]["PRIVATE_KEY_ID"],
+                    "private_key": st.secrets["FIREBASE"]["PRIVATE_KEY"].replace('\\n', '\n'),
+                    "client_email": st.secrets["FIREBASE"]["CLIENT_EMAIL"],
+                    "client_id": st.secrets["FIREBASE"]["CLIENT_ID"],
+                    "auth_uri": st.secrets["FIREBASE"]["AUTH_URI"],
+                    "token_uri": st.secrets["FIREBASE"]["TOKEN_URI"],
+                    "auth_provider_x509_cert_url": st.secrets["FIREBASE"]["AUTH_PROVIDER_X509_CERT_URL"],
+                    "client_x509_cert_url": st.secrets["FIREBASE"]["CLIENT_X509_CERT_URL"],
+                    "universe_domain": st.secrets["FIREBASE"]["UNIVERSE_DOMAIN"]
+                }
+            except KeyError:
+                # Fallback for local development if secrets are not set up, expecting a file
+                st.warning("Firebase secrets not found. Attempting to load credentials from firebase_credentials.json.")
+                with open(cred_path, 'r') as f:
+                    firebase_config = json.load(f)
+
+            cred = credentials.Certificate(firebase_config)
+            firebase_admin.initialize_app(cred)
+            
+            # Initialize Firestore
+            db = firestore.client()
+            
+            st.session_state.firebase_db = db
+            return True
+        else:
+            # Already initialized
+            if 'firebase_db' not in st.session_state:
+                st.session_state.firebase_db = firestore.client()
+            return True
+    except Exception as e:
+        st.error(f"Firebase initialization failed: {str(e)}")
+        st.info("Please ensure your `.streamlit/secrets.toml` is correctly configured or `firebase_credentials.json` is present.")
+        return False
+
+# User Authentication Functions
+def firebase_login_ui():
+    """Display Firebase login UI and handle authentication"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Login to Your Account</h3>", unsafe_allow_html=True)
+    
+    with st.form("firebase_login_form"):
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Login", use_container_width=True)
+        
+        if submitted:
+            if not email or not password:
+                st.warning("Please enter both email and password")
+            else:
+                try:
+                    user_record = auth.get_user_by_email(email)
+                    
+                    db = st.session_state.firebase_db
+                    user_doc = db.collection('users').document(user_record.uid).get()
+                    
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        
+                        # Check if user is approved
+                        if user_data.get('status') != 'approved':
+                            st.error("Your account is pending approval. Please wait for admin approval.")
+                            return
+                        
+                        # Store ALL required user data in session state
+                        st.session_state.user = {
+                            'uid': user_record.uid,
+                            'email': user_record.email,
+                            'username': user_data.get('username', user_record.email.split('@')[0]),  # Fallback to email prefix if no username
+                            'displayName': user_data.get('fullName', 'User'),
+                            'role': user_data.get('role', 'individual'),  # Required: user_type
+                            'user_type': user_data.get('role', 'individual'),  # Alias for compatibility
+                            'institution': user_data.get('institution', ''),
+                            'treeTrackingNumber': user_data.get('treeTrackingNumber', '')
+                        }
+                        
+                        st.session_state.authenticated = True
+                        
+                        # Set appropriate page based on role
+                        if user_data.get('role') == 'admin':
+                            st.session_state.page = "Admin Dashboard"
+                        else:
+                            st.session_state.page = "User Dashboard"
+                        
+                        st.success(f"Welcome {user_data.get('fullName', 'User')}!")
+                        st.rerun()
+                    else:
+                        st.error("User profile not found in Firestore. Please contact support.")
+                except auth.AuthError as e:
+                    st.error(f"Login failed: Invalid email or password. ({e.code})")
+                except Exception as e:
+                    st.error(f"An unexpected error occurred during login: {str(e)}")
+
+def firebase_signup_ui():
+    """Display Firebase signup UI and handle user registration"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Create New Account</h3>", unsafe_allow_html=True)
+    
+    with st.form("firebase_signup_form"):
+        fullname = st.text_input("Full Name", key="signup_fullname")
+        email = st.text_input("Email", key="signup_email")
+        
+        # User role selection (simplified to individual/institution)
+        role = st.selectbox("Account Type", ["individual", "institution"], key="signup_role")
+        
+        # Institution name field (shown only for institution role)
+        institution = ""
+        if role == "institution":
+            institution = st.text_input("Institution Name", key="signup_institution")
+        
+        # Additional fields as per requirements
+        country = st.text_input("Country", key="signup_country")
+        county = st.text_input("County", key="signup_county")
+        location = st.text_input("Location", key="signup_location")
+        reason = st.text_area("Reason for Joining", key="signup_reason")
+        
+        # How did you hear about us
+        heard_about = st.selectbox("How did you hear about us?", 
+                                  ["Social Media", "Friend/Colleague", "Search Engine", "Event", "Other"], 
+                                  key="signup_heard_about")
+        
+        # Terms and conditions
+        terms_agreed = st.checkbox("I agree to the Terms and Conditions", key="signup_terms")
+        
+        # Password fields
+        password = st.text_input("Password", type="password", key="signup_password")
+        confirm_password = st.text_input("Confirm Password", type="password", key="signup_confirm_password")
+        
+        submitted = st.form_submit_button("Sign Up", use_container_width=True)
+        
+        if submitted:
+            # Validate inputs
+            if not fullname or not email or not password or not confirm_password:
+                st.error("Please fill in all required fields")
+                return
+                
+            if role == "institution" and not institution:
+                st.error("Institution name is required for institution accounts")
+                return
+                
+            if not terms_agreed:
+                st.error("You must agree to the Terms and Conditions")
+                return
+                
+            if password != confirm_password:
+                st.error("Passwords do not match")
+                return
+                
+            if len(password) < 6:
+                st.error("Password must be at least 6 characters")
+                return
+            
+            # Create user in Firebase Auth
+            try:
+                # Check if user already exists
+                try:
+                    existing_user = auth.get_user_by_email(email)
+                    st.error("An account with this email already exists")
+                    return
+                except firebase_admin.auth.UserNotFoundError: # Correct exception for user not found
+                    pass # User doesn't exist, proceed with creation
+                
+                # Create user in Firebase Auth
+                user = auth.create_user(
+                    email=email,
+                    password=password,
+                    display_name=fullname,
+                    disabled=False  # Account is enabled but will need approval
+                )
+                
+                # Store additional user data in Firestore
+                db = st.session_state.firebase_db
+                user_data = {
+                    'fullName': fullname,
+                    'email': email,
+                    'role': role,
+                    'institution': institution if role == "institution" else "",
+                    'country': country,
+                    'county': county,
+                    'location': location,
+                    'reason': reason,
+                    'heardAbout': heard_about,
+                    'termsAgreed': terms_agreed,
+                    'createdAt': firestore.SERVER_TIMESTAMP,
+                    'status': 'pending',  # Pending admin approval
+                    'treeTrackingNumber': ""  # Will be assigned upon approval
+                }
+                
+                db.collection('users').document(user.uid).set(user_data)
+                
+                st.success("Account created successfully! Your account is pending approval by an administrator.")
+                
+            except AuthError as e: # Catch specific Firebase Auth errors
+                st.error(f"Error creating account: {e.code}: {e.message}")
+            except Exception as e:
+                st.error(f"An unexpected error occurred during account creation: {str(e)}")
+
+def firebase_password_recovery_ui():
+    """Display password recovery UI"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Reset Your Password</h3>", unsafe_allow_html=True)
+    
+    with st.form("password_recovery_form"):
+        email = st.text_input("Email Address", key="recovery_email")
+        submitted = st.form_submit_button("Send Reset Link", use_container_width=True)
+        
+        if submitted:
+            if not email:
+                st.warning("Please enter your email address")
+                return
+                
+            try:
+                # Firebase Admin SDK does not directly send password reset emails for users.
+                # This is typically handled client-side using Firebase JavaScript SDK's `sendPasswordResetEmail`.
+                # For this Streamlit app using Admin SDK, a placeholder is needed or you'd integrate with an email service
+                # that uses Firebase Admin SDK's capability to generate password reset links (not send directly).
+                # For demonstration, we'll just check if the user exists.
+                
+                auth.get_user_by_email(email) # This will raise an error if user does not exist
+                st.success(f"If an account with {email} exists, a password reset link has been sent to it. Please check your inbox.")
+            except firebase_admin.auth.UserNotFoundError:
+                st.error("No account found with this email address.")
+            except Exception as e:
+                st.error(f"An unexpected error occurred during password recovery: {str(e)}")
+
+def firebase_admin_approval_ui():
+    """Display admin UI for approving new users and assigning tree tracking numbers"""
+    if not st.session_state.get('authenticated'):
+        st.error("You must be logged in as an admin to access this page")
+        return
+        
+    user_role = st.session_state.user.get('role')
+    if user_role != 'admin':
+        st.error("You don't have permission to access this page")
+        return
+    
+    st.markdown("<h3 style='color: #1D7749;'>User Approval Dashboard</h3>", unsafe_allow_html=True)
+    
+    try:
+        db = st.session_state.firebase_db
+        
+        # Get pending users
+        # For simplicity and to avoid complex Firestore indexing, we'll fetch all and filter in Python.
+        # In a very large scale app, you'd use Firestore queries with `where` clauses.
+        all_users_ref = db.collection('users').stream()
+        pending_users = []
+        
+        for user_doc in all_users_ref:
+            user_data = user_doc.to_dict()
+            user_data['uid'] = user_doc.id # Add UID to the dictionary
+            if user_data.get('status') == 'pending':
+                pending_users.append(user_data)
+        
+        if not pending_users:
+            st.info("No pending user applications")
+            return
+            
+        st.write(f"Found {len(pending_users)} pending applications")
+        
+        for i, user in enumerate(pending_users):
+            with st.expander(f"{user.get('fullName', 'N/A')} - {user.get('email', 'N/A')} ({user.get('role', 'N/A')})"):
+                st.write(f"**Full Name:** {user.get('fullName', 'N/A')}")
+                st.write(f"**Email:** {user.get('email', 'N/A')}")
+                st.write(f"**Role:** {user.get('role', 'N/A')}")
+                
+                if user.get('role') == 'institution':
+                    st.write(f"**Institution:** {user.get('institution', 'N/A')}")
+                    
+                st.write(f"**Country:** {user.get('country', 'N/A')}")
+                st.write(f"**County:** {user.get('county', 'N/A')}")
+                st.write(f"**Location:** {user.get('location', 'N/A')}")
+                st.write(f"**Reason for Joining:** {user.get('reason', 'N/A')}")
+                st.write(f"**Heard About Us:** {user.get('heardAbout', 'N/A')}")
+                created_at_dt = None
+                if user.get('createdAt'):
+                    # Firestore Timestamps need conversion
+                    if isinstance(user.get('createdAt'), datetime.datetime):
+                        created_at_dt = user.get('createdAt')
+                    elif hasattr(user.get('createdAt'), 'nanoseconds'): # Firebase Timestamp object
+                         created_at_dt = user.get('createdAt').comparable_datetime(tzinfo=datetime.timezone.utc)
+                    else:
+                        created_at_dt = datetime.datetime.fromtimestamp(user.get('createdAt'), tz=datetime.timezone.utc) # Assume epoch if not datetime object
+                st.write(f"**Applied On:** {created_at_dt.strftime('%Y-%m-%d %H:%M:%S') if created_at_dt else 'Unknown'}")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("Approve", key=f"approve_{user.get('uid')}", use_container_width=True):
+                        # Generate tree tracking number
+                        tracking_number = generate_tree_tracking_number(user.get('role'), user.get('institution'))
+                        
+                        # Update user status and add tracking number
+                        db.collection('users').document(user.get('uid')).update({
+                            'status': 'approved',
+                            'treeTrackingNumber': tracking_number,
+                            'approvedAt': firestore.SERVER_TIMESTAMP
+                        })
+                        
+                        # Log the approval and tracking number assignment
+                        st.success(f"User {user.get('email')} approved with tracking number: {tracking_number}")
+                        st.rerun() # Rerun to refresh the list of pending users
+                
+                with col2:
+                    if st.button("Reject", key=f"reject_{user.get('uid')}", use_container_width=True):
+                        # Update user status
+                        db.collection('users').document(user.get('uid')).update({
+                            'status': 'rejected',
+                            'rejectedAt': firestore.SERVER_TIMESTAMP
+                        })
+                        
+                        # Log the rejection
+                        st.error(f"User {user.get('email')} rejected.")
+                        st.rerun() # Rerun to refresh the list of pending users
+    
+    except Exception as e:
+        st.error(f"Error loading pending users: {str(e)}")
+        st.warning("Ensure your Firestore security rules allow read access for authenticated admins.")
+
+def generate_tree_tracking_number(role, institution=None):
+    """
+    Generate a unique tree tracking number for approved users
+    
+    Format: [I/N][Institution prefix if applicable][Random 6 digits]
+    I = Institution, N = Individual
+    
+    Examples:
+    - Individual: N123456
+    - Institution (Acme School): IACM123456
+    """
+    # Role prefix: I for institution, N for individual
+    prefix = "I" if role == "institution" else "N"
+    
+    # Add institution prefix if applicable (first 3 letters, uppercase)
+    inst_prefix = ""
+    if role == "institution" and institution:
+        # Remove spaces, special chars, take first 3 letters
+        inst_prefix = re.sub(r'[^a-zA-Z]', '', institution)[:3].upper()
+    
+    # Generate random 6-digit number
+    # Using uuid.uuid4().int for uniqueness, then taking first 6 digits
+    random_digits = str(uuid.uuid4().int)[:6]
+    
+    # Combine to form tracking number
+    tracking_number = f"{prefix}{inst_prefix}{random_digits}"
+    
+    st.info(f"Generated tracking number: {tracking_number} for {role} {institution if institution else ''}")
+    
+    return tracking_number
+
+def firebase_logout():
+    """Handle user logout"""
+    # Clear session state
+    if 'user' in st.session_state:
+        del st.session_state.user
+    
+    if 'authenticated' in st.session_state:
+        del st.session_state.authenticated
+    
+    # In a real Firebase client app, you would call `auth.signOut()`.
+    # Firebase Admin SDK doesn't manage client-side authentication sessions directly.
+    # Clearing Streamlit session state is sufficient for a server-side app.
+    st.success("You have been logged out.")
+
+def get_current_firebase_user():
+    """Get current Firebase user from session state"""
+    if st.session_state.get('authenticated') and 'user' in st.session_state:
+        return st.session_state.user
+    return None
+
+def check_firebase_user_role(user, role):
+    """Check if user has specified role"""
+    if not user:
+        return False
+    
+    return user.get('role') == role
+
+def show_firebase_setup_guide():
+    """Displays a guide for setting up Firebase credentials for this application."""
+    st.markdown("<h3 style='color: #1D7749;'>Firebase Setup Guide</h3>", unsafe_allow_html=True)
+    
+    st.markdown("""
+    To enable Firebase authentication and user management in this application, you need to configure your Firebase project and provide the service account credentials.
+
+    **Follow these steps carefully:**
+
+    ---
+    #### Step 1: Create a Firebase Project
+    1.  Go to the [Firebase Console](https://console.firebase.google.com/)
+    2.  Click "Add project" and follow the on-screen instructions.
+    3.  Enable Google Analytics for your project if desired.
+    4.  Click "Create project".
+
+    ---
+    #### Step 2: Set Up Authentication
+    1.  In your Firebase project, navigate to "Build" > "Authentication" in the left sidebar.
+    2.  Click "Get started".
+    3.  Go to the "Sign-in method" tab.
+    4.  Enable the **"Email/Password"** provider.
+    5.  Ensure "Email/Password" is enabled. You can optionally enable other providers later.
+    6.  Save your changes.
+
+    ---
+    #### Step 3: Create a Firestore Database
+    1.  In your Firebase project, navigate to "Build" > "Firestore Database" in the left sidebar.
+    2.  Click "Create database".
+    3.  Choose to start in **"production mode"** (you can adjust security rules later).
+    4.  Select a location closest to your users.
+    5.  Click "Enable".
+
+    ---
+    #### Step 4: Generate Service Account Credentials
+    1.  In your Firebase project, go to "Project settings" (the gear icon next to "Project overview").
+    2.  Navigate to the **"Service accounts"** tab.
+    3.  Click the **"Generate new private key"** button.
+    4.  A JSON file will be downloaded. This file contains your service account credentials.
+    5.  **Save this JSON file securely.** It grants administrative access to your Firebase project.
+
+    ---
+    #### Step 5: Configure Streamlit Secrets or Place JSON File
+    You have two primary options to provide these credentials to your Streamlit app:
+
+    **Option A (Recommended for Deployment): Using Streamlit Secrets**
+    * Create a `.streamlit` folder in your project's root directory if it doesn't exist.
+    * Inside `.streamlit`, create a file named `secrets.toml`.
+    * Open the JSON file you downloaded in Step 4. Copy its contents.
+    * Paste the contents into `secrets.toml` under a `[FIREBASE]` section, converting JSON keys to TOML format.
+        * **Important:** The `private_key` value in the JSON file contains newline characters (`\n`). In `secrets.toml`, these need to be escaped as `\\n`.
+
+        Example `secrets.toml` structure:
+        ```toml
+        [FIREBASE]
+        TYPE = "service_account"
+        PROJECT_ID = "your-project-id"
+        PRIVATE_KEY_ID = "your-private-key-id"
+        PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\\n...your_private_key_content...\\n-----END PRIVATE KEY-----\\n"
+        CLIENT_EMAIL = "firebase-adminsdk-xxxxx@your-project-id.iam.gserviceaccount.com"
+        CLIENT_ID = "your-client-id"
+        AUTH_URI = "[https://accounts.google.com/o/oauth2/auth](https://accounts.google.com/o/oauth2/auth)"
+        TOKEN_URI = "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)"
+        AUTH_PROVIDER_X509_CERT_URL = "[https://www.googleapis.com/oauth2/v1/certs](https://www.googleapis.com/oauth2/v1/certs)"
+        CLIENT_X509_CERT_URL = "[https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xxxxx%40your-project-id.iam.gserviceaccount.com](https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-xxxxx%40your-project-id.iam.gserviceaccount.com)"
+        UNIVERSE_DOMAIN = "googleapis.com"
+        ```
+        * **Ensure `PRIVATE_KEY` has `\\n` for newlines.**
+
+    **Option B (For Local Development, less secure for deployment): Placing the JSON File Directly**
+    * Rename the downloaded JSON file to `firebase_credentials.json`.
+    * Place this `firebase_credentials.json` file in the **same directory** as your `app.py` and `firebase_auth_integration.py` files.
+    * The `initialize_firebase()` function will attempt to load from `secrets.toml` first, then fall back to `firebase_credentials.json`.
+
+    ---
+    #### Step 6: Restart Your Streamlit Application
+    After placing the `secrets.toml` file or `firebase_credentials.json`, restart your Streamlit application completely.
+
+    If you've followed these steps, the "Authentication services are currently unavailable" message should disappear, and Firebase features will become active.
+    """)
+    
+    if st.button("I've configured Firebase credentials. Try re-initializing.", use_container_width=True):
+        if initialize_firebase():
+            st.success("Firebase re-initialized successfully! You can now proceed with login/signup and other features.")
+            st.session_state.firebase_initialized = True # Update session state
+            st.rerun()
+        else:
+            st.error("Firebase re-initialization failed. Please double-check your credentials and setup.")
+            st.session_state.firebase_initialized = False # Update session state
+
+# The __name__ == "__main__" block for testing the module directly
+if __name__ == "__main__":
+    st.set_page_config(
+        page_title="CarbonTally - Firebase Auth Test Module",
+        layout="wide"
+    )
+    st.title("Firebase Authentication Integration Test Module")
+    
+    # Initialize Firebase at startup for testing within this module
+    if 'firebase_initialized' not in st.session_state:
+        st.session_state.firebase_initialized = initialize_firebase()
+
+    st.markdown("---")
+    st.subheader("Test UI for Firebase Auth Integration")
+
+    if st.session_state.get('firebase_initialized'):
+        st.success("Firebase Admin SDK is initialized.")
+        
+        test_tab_login, test_tab_signup, test_tab_recovery, test_tab_admin, test_tab_setup = st.tabs(["Login", "Sign Up", "Password Recovery", "Admin Approval", "Setup Guide"])
+
+        with test_tab_login:
+            firebase_login_ui()
+        with test_tab_signup:
+            firebase_signup_ui()
+        with test_tab_recovery:
+            firebase_password_recovery_ui()
+        with test_tab_admin:
+            st.info("To test Admin Approval, you need to be logged in as an 'admin' user.")
+            firebase_admin_approval_ui()
+        with test_tab_setup:
+            show_firebase_setup_guide()
+            
+        st.markdown("---")
+        st.subheader("Current User Info (if logged in)")
+        current_user = get_current_firebase_user()
+        if current_user:
+            st.json(current_user)
+            if st.button("Logout from Test UI"):
+                firebase_logout()
+                st.rerun()
+        else:
+            st.info("No user currently logged in.")
+            
+    else:
+        st.error("Firebase Admin SDK is NOT initialized. Please follow the setup guide.")
+        show_firebase_setup_guide()
+
