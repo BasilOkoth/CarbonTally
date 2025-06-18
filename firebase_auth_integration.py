@@ -4,9 +4,9 @@ from firebase_admin import credentials, auth, firestore
 from firebase_admin.exceptions import FirebaseError
 from typing import Optional, Dict, Any
 
-# Initialize Firebase (singleton pattern)
+# Initialize Firebase
 def initialize_firebase():
-    """Initialize Firebase Admin SDK with credentials"""
+    """Initialize Firebase Admin SDK"""
     try:
         if not firebase_admin._apps:
             if not all(key in st.secrets["firebase"] for key in ["type", "project_id", "private_key"]):
@@ -28,104 +28,126 @@ def initialize_firebase():
             firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        st.error(f"Firebase init error: {str(e)}")
+        st.error(f"Firebase initialization failed: {str(e)}")
         return None
+
+# Password Recovery Function
+def firebase_password_recovery_ui():
+    """Render password recovery UI"""
+    st.title("🔒 Password Recovery")
+    
+    with st.form("recovery_form"):
+        email = st.text_input("Enter your registered email")
+        submit = st.form_submit_button("Send Reset Link")
+        
+        if submit:
+            try:
+                # Generate password reset link
+                reset_link = auth.generate_password_reset_link(email)
+                st.success(f"Password reset link sent to {email}")
+                st.markdown(f"[Click here to reset password]({reset_link})")
+            except FirebaseError as e:
+                st.error(f"Password reset failed: {e}")
 
 # Authentication UI Components
 def firebase_login_ui():
-    """Render login form and handle authentication"""
+    """Render login form"""
     st.title("🔐 Login")
     
     with st.form("login_form"):
-        email = st.text_input("Email", placeholder="your@email.com")
+        email = st.text_input("Email")
         password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Sign In")
-
-        if submit:
-            handle_login(email, password)
-
-def handle_login(email: str, password: str):
-    """Authenticate user with Firebase"""
-    try:
-        # Verify credentials (you might need Firebase Client SDK here)
-        # This is a placeholder - actual implementation depends on your auth method
-        user = auth.get_user_by_email(email)
+        submit = st.form_submit_button("Login")
         
-        # Store user in session
-        st.session_state.user = {
-            'uid': user.uid,
-            'email': user.email,
-            'displayName': user.display_name or email.split('@')[0],
-            'role': user.custom_claims.get('role', 'individual')
-        }
-        st.session_state.authenticated = True
-        st.success("Login successful!")
-        st.rerun()
-    except FirebaseError as e:
-        st.error(f"Login failed: {e}")
+        if submit:
+            try:
+                user = auth.get_user_by_email(email)
+                st.session_state.user = {
+                    'uid': user.uid,
+                    'email': user.email,
+                    'displayName': user.display_name or email.split('@')[0],
+                    'role': user.custom_claims.get('role', 'individual')
+                }
+                st.session_state.authenticated = True
+                st.success("Login successful!")
+                st.rerun()
+            except FirebaseError as e:
+                st.error(f"Login failed: {e}")
 
 def firebase_signup_ui():
-    """Render user registration form"""
-    st.title("📝 Create Account")
+    """Render signup form"""
+    st.title("📝 Sign Up")
     
     with st.form("signup_form"):
-        email = st.text_input("Email", placeholder="your@email.com")
+        email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         display_name = st.text_input("Full Name")
         role = st.selectbox("Account Type", ["individual", "institution"])
-        submit = st.form_submit_button("Register")
-
+        submit = st.form_submit_button("Create Account")
+        
         if submit:
-            handle_signup(email, password, display_name, role)
+            try:
+                user = auth.create_user(
+                    email=email,
+                    password=password,
+                    display_name=display_name
+                )
+                auth.set_custom_user_claims(user.uid, {'role': role})
+                
+                db = firestore.client()
+                db.collection("users").document(user.uid).set({
+                    'email': email,
+                    'displayName': display_name,
+                    'role': role,
+                    'createdAt': firestore.SERVER_TIMESTAMP
+                })
+                
+                st.success("Account created! Please login.")
+                st.session_state.page = "login"
+                st.rerun()
+            except FirebaseError as e:
+                st.error(f"Signup failed: {e}")
 
-def handle_signup(email: str, password: str, display_name: str, role: str):
-    """Register new user in Firebase"""
-    try:
-        user = auth.create_user(
-            email=email,
-            password=password,
-            display_name=display_name
-        )
-        
-        # Set custom claims for role-based access
-        auth.set_custom_user_claims(user.uid, {'role': role})
-        
-        # Store additional user data in Firestore
-        db = firestore.client()
-        db.collection("users").document(user.uid).set({
-            'email': email,
-            'displayName': display_name,
-            'role': role,
-            'createdAt': firestore.SERVER_TIMESTAMP
-        })
-        
-        st.success("Account created! Please login.")
-        st.session_state.page = "login"
-        st.rerun()
-    except FirebaseError as e:
-        st.error(f"Registration failed: {e}")
-
-def firebase_logout():
-    """Terminate user session"""
-    keys = ['user', 'authenticated']
-    for key in keys:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.rerun()
+def firebase_admin_approval_ui():
+    """Render admin approval UI"""
+    if not check_user_role('admin'):
+        st.warning("Admin access required")
+        return
+    
+    st.title("👥 User Approvals")
+    db = firestore.client()
+    unapproved_users = db.collection("users").where("approved", "==", False).stream()
+    
+    for user in unapproved_users:
+        with st.expander(user.get('email')):
+            st.write(f"Name: {user.get('displayName')}")
+            st.write(f"Role: {user.get('role')}")
+            if st.button(f"Approve {user.get('email')}"):
+                db.collection("users").document(user.id).update({"approved": True})
+                st.success(f"Approved {user.get('email')}")
+                st.rerun()
 
 # User Management
 def get_current_user() -> Optional[Dict[str, Any]]:
-    """Retrieve current user from session"""
+    """Get current user from session"""
     return st.session_state.get('user')
 
 def check_auth() -> bool:
-    """Verify authentication status"""
+    """Check authentication status"""
     return st.session_state.get('authenticated', False)
 
 def check_user_role(required_role: str) -> bool:
     """Check if user has required role"""
     user = get_current_user()
     return user and user.get('role') == required_role
+
+def firebase_logout():
+    """Handle logout"""
+    for key in ['user', 'authenticated']:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.success("Logged out successfully!")
+    st.rerun()
 
 def require_auth():
     """Redirect to login if not authenticated"""
