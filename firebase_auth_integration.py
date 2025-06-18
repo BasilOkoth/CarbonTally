@@ -1,4 +1,3 @@
-import time
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
@@ -13,7 +12,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 import logging
-import sqlite3 # NEW: Import sqlite3 for database interaction
+import sqlite3 # Import sqlite3 for database interaction
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
 
-# NEW: Database Configuration (must match app.py)
+# Database Configuration (must match app.py)
 DATA_DIR = BASE_DIR / "data"
 SQLITE_DB = DATA_DIR / "trees.db"
 
@@ -106,19 +105,31 @@ EMAIL_TEMPLATES = {
     }
 }
 
-# New Firebase configuration directly from the provided JSON
-
-
 def initialize_firebase():
-    """Initialize Firebase Admin SDK if not already initialized"""
+    """Initialize Firebase Admin SDK if not already initialized, loading config from secrets.toml"""
     try:
         if not firebase_admin._apps:
-            try:
-                # Use the hardcoded Firebase config
-                firebase_config = FIREBASE_CONFIG
-            except Exception as e:
-                st.error(f"Error loading Firebase configuration: {str(e)}")
+            # Load Firebase configuration from secrets.toml
+            firebase_config = st.secrets.get("firebase")
+
+            if not firebase_config:
+                st.error(
+                    "Firebase configuration not found in `secrets.toml` under the `[firebase]` section. "
+                    "Please ensure your Firebase configuration is correct." # Adjusted message
+                )
                 return None
+
+            # Ensure all required fields for credentials.Certificate are present
+            required_keys = [
+                "type", "project_id", "private_key_id", "private_key",
+                "client_email", "client_id", "auth_uri", "token_uri",
+                "auth_provider_x509_cert_url", "client_x509_cert_url",
+                "universe_domain"
+            ]
+            for key in required_keys:
+                if key not in firebase_config:
+                    st.error(f"Missing '{key}' in your Firebase secrets configuration. Please check your `secrets.toml` file.")
+                    return None
 
             # Initialize Firebase app
             cred = credentials.Certificate(firebase_config)
@@ -135,10 +146,10 @@ def initialize_firebase():
 
     except Exception as e:
         st.error(f"Firebase initialization failed: {str(e)}")
-        st.info("Please ensure your Firebase configuration is correct.")
+        st.info("Please ensure your Firebase configuration in `secrets.toml` is correct.")
         return None
 
-# NEW: Helper function to add institution to DB (copied from app.py for self-containment)
+# Helper function to add institution to DB (copied from app.py for self-containment)
 def add_institution_to_db(firebase_uid: str, full_name: str):
     """Adds a new participant record to the SQLite database.
     This function is called upon successful signup of an 'individual' OR 'institution' user.
@@ -436,14 +447,12 @@ def firebase_signup_ui():
                     
                     user_ref.set(user_data)
 
-                    # NEW: Add user to the SQLite 'institutions' table for landing page count
+                    # Add user to the SQLite 'institutions' table for landing page count
                     if user_type in ['individual', 'institution']:
                         add_institution_to_db(user.uid, full_name)
 
                     st.success("Account created successfully! Your account is pending admin approval. You will receive an email once approved.")
                     logger.info(f"New user registered: {email} (UID: {user.uid})")
-                    # Wait 5 seconds before redirecting
-                    time.sleep(5)
                     st.session_state.page = "Login"
                     st.rerun()
 
@@ -549,31 +558,3 @@ def check_firebase_user_role(user, role):
     if user and 'role' in user:
         return user['role'] == role
     return False
-def show_firebase_setup_guide():
-    """
-    Displays a guide for setting up Firebase credentials.
-    """
-    st.markdown("""
-    ### Firebase Setup Guide
-
-    It looks like Firebase is not initialized. This usually means the Firebase Admin SDK credentials are not correctly configured.
-
-    **To fix this, please follow these steps:**
-
-    1.  **Go to Firebase Console:** Navigate to your Firebase project at [console.firebase.google.com](https://console.firebase.google.com/).
-    2.  **Project settings:** Click on the 'Project settings' gear icon next to 'Project overview'.
-    3.  **Service accounts:** Go to the 'Service accounts' tab.
-    4.  **Generate new private key:** Click 'Generate new private key' to download a `.json` file.
-    5.  **Save it securely:** Move this `.json` file to a secure folder in your project (e.g., `secrets/`).
-    6.  **Update your `config.toml` file** with the path to your service account file:
-        ```toml
-        [firebase]
-        service_account = "secrets/carbontally-key.json"
-        ```
-    7.  **Ensure `.gitignore` is updated** to exclude secrets:
-        ```
-        secrets/
-        *.json
-        ```
-    After this, your app will load credentials securely and GitHub won’t block the push.
-    """)
