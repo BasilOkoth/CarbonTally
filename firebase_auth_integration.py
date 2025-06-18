@@ -53,12 +53,12 @@ def check_firebase_user_role(user: Dict[str, Any], required_role: str) -> bool:
 def firebase_login_ui():
     """Render login UI"""
     st.title("🔐 Login")
-    
+
     with st.form("login_form"):
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         submit = st.form_submit_button("Login")
-        
+
         if submit:
             try:
                 user = auth.get_user_by_email(email)
@@ -77,14 +77,14 @@ def firebase_login_ui():
 def firebase_signup_ui():
     """Render signup UI"""
     st.title("📝 Sign Up")
-    
+
     with st.form("signup_form"):
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
         display_name = st.text_input("Full Name")
         role = st.selectbox("Account Type", ["individual", "institution"])
         submit = st.form_submit_button("Create Account")
-        
+
         if submit:
             try:
                 user = auth.create_user(
@@ -93,16 +93,17 @@ def firebase_signup_ui():
                     display_name=display_name
                 )
                 auth.set_custom_user_claims(user.uid, {'role': role})
-                
+
                 db = firestore.client()
                 db.collection("users").document(user.uid).set({
                     'email': email,
                     'displayName': display_name,
                     'role': role,
+                    'approved': False,
                     'createdAt': firestore.SERVER_TIMESTAMP
                 })
-                
-                st.success("Account created! Please login.")
+
+                st.success("Account created! Your account is pending approval. Please login later.")
                 st.session_state.page = "login"
                 st.rerun()
             except FirebaseError as e:
@@ -111,11 +112,11 @@ def firebase_signup_ui():
 def firebase_password_recovery_ui():
     """Render password recovery UI"""
     st.title("🔒 Password Recovery")
-    
+
     with st.form("recovery_form"):
         email = st.text_input("Enter your registered email")
         submit = st.form_submit_button("Send Reset Link")
-        
+
         if submit:
             try:
                 reset_link = auth.generate_password_reset_link(email)
@@ -130,11 +131,11 @@ def firebase_admin_approval_ui():
     if not check_firebase_user_role(user, "admin"):
         st.warning("Admin access required")
         return
-    
+
     st.title("👥 User Approvals")
     db = firestore.client()
     unapproved_users = db.collection("users").where("approved", "==", False).stream()
-    
+
     for user_doc in unapproved_users:
         user_data = user_doc.to_dict()
         with st.expander(user_data.get('email')):
@@ -152,3 +153,32 @@ def firebase_logout():
             del st.session_state[key]
     st.success("Logged out successfully!")
     st.rerun()
+
+def show_firebase_setup_guide():
+    """
+    Displays a guide for setting up Firebase credentials using Streamlit secrets.
+    """
+    st.markdown("""
+    ### 🔧 Firebase Setup Guide
+
+    Your app couldn't connect to Firebase. This usually means the Firebase Admin credentials are not correctly configured.
+
+    **How to fix it:**
+
+    1. Go to [Firebase Console](https://console.firebase.google.com/) and open your project.
+    2. Click ⚙️ **Project Settings** → **Service Accounts** tab.
+    3. Click **"Generate New Private Key"** and save the `.json` file.
+    4. In your Streamlit Cloud dashboard:
+       - Go to **"Advanced settings" → "Secrets"**.
+       - Paste the full JSON content under a `firebase` key like this:
+         ```
+         [firebase]
+         type = "service_account"
+         project_id = "your-project-id"
+         private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+         ...
+         ```
+    5. Save and restart your app.
+
+    ✅ After that, your app should connect to Firebase successfully.
+    """)
