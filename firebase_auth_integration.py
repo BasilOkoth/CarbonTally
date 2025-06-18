@@ -14,73 +14,87 @@ from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 import logging
 import sqlite3
+import pandas as pd
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# This file provides Firebase authentication and user management for CarbonTally app
-# It includes email notifications for account approval, rejection, and password reset
-
 # Configuration
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
-
-# Database Configuration (must match app.py and kobo_integration.py)
 DATA_DIR = BASE_DIR / "data"
 SQLITE_DB = DATA_DIR / "trees.db"
 
-# Email Templates
+# Email Templates (aligned with app.py)
 EMAIL_TEMPLATES = {
     "approval": {
         "subject": "CarbonTally - Your Account Has Been Approved",
         "body": """
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
-                <h2 style="color: #28a745;">Congratulations! Your CarbonTally Account is Approved!</h2>
-                <p>Dear {username},</p>
-                <p>We are delighted to inform you that your CarbonTally account has been approved.</p>
-                <p>You can now log in to the CarbonTally app using your credentials and start planting trees and monitoring their progress.</p>
-                <p>Thank you for joining our mission to make a greener planet!</p>
-                <p>Best regards,</p>
-                <p>The CarbonTally Team</p>
-                <p style="font-size: 0.9em; color: #777;">This is an automated email, please do not reply.</p>
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <h2 style="color: #2e8b57;">CarbonTally</h2>
+                </div>
+                <p>Dear {fullName},</p>
+                <p>Congratulations! Your CarbonTally account has been approved.</p>
+                <p>You can now log in using your email and password at <a href="{app_url}" style="color: #2e8b57;">CarbonTally</a>.</p>
+                <p><strong>Your Tree Tracking Number:</strong> {treeTrackingNumber}</p>
+                <p>This unique tracking number will help you monitor and track all trees you plant through our platform.</p>
+                <p>Thank you for joining our mission to combat climate change through tree planting initiatives!</p>
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; font-size: 0.8em; color: #666;">
+                    <p>CarbonTally - Empowering Tree Monitoring and Climate Action</p>
+                    <p>If you have any questions, please contact us at <a href="mailto:okothbasil45@gmail.com" style="color: #2e8b57;">okothbasil45@gmail.com</a></p>
+                </div>
             </div>
         </body>
         </html>
         """
     },
     "rejection": {
-        "subject": "CarbonTally - Account Application Update",
+        "subject": "CarbonTally - Account Application Status",
         "body": """
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
-                <h2 style="color: #dc3545;">Update Regarding Your CarbonTally Account Application</h2>
-                <p>Dear {username},</p>
-                <p>Thank you for your interest in CarbonTally. We have reviewed your account application and, unfortunately, we are unable to approve it at this time.</p>
-                <p>If you believe this is an error or would like to provide more information, please contact our support team.</p>
-                <p>Best regards,</p>
-                <p>The CarbonTally Team</p>
-                <p style="font-size: 0.9em; color: #777;">This is an automated email, please do not reply.</p>
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <h2 style="color: #2e8b57;">CarbonTally</h2>
+                </div>
+                <p>Dear {fullName},</p>
+                <p>Thank you for your interest in CarbonTally.</p>
+                <p>We regret to inform you that your account application has not been approved at this time.</p>
+                <p>This could be due to various reasons, such as incomplete information or not meeting our current criteria.</p>
+                <p>You are welcome to submit a new application with complete information or contact us for more details.</p>
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; font-size: 0.8em; color: #666;">
+                    <p>CarbonTally - Empowering Tree Monitoring and Climate Action</p>
+                    <p>If you have any questions, please contact us at <a href="mailto:okothbasil45@gmail.com" style="color: #2e8b57;">okothbasil45@gmail.com</a></p>
+                </div>
             </div>
         </body>
         </html>
         """
     },
-    "password_reset_success": {
-        "subject": "CarbonTally - Password Reset Confirmation",
+    "password_reset": {
+        "subject": "CarbonTally - Password Reset Link",
         "body": """
         <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd;">
-                <h2 style="color: #007bff;">Your Password Has Been Reset</h2>
-                <p>Dear {username},</p>
-                <p>This is to confirm that the password for your CarbonTally account associated with {email} has been successfully reset.</p>
-                <p>If you did not initiate this change, please contact us immediately.</p>
-                <p>Best regards,</p>
-                <p>The CarbonTally Team</p>
-                <p style="font-size: 0.9em; color: #777;">This is an automated email, please do not reply.</p>
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <h2 style="color: #2e8b57;">CarbonTally</h2>
+                </div>
+                <p>Dear User,</p>
+                <p>We received a request to reset your password for your CarbonTally account.</p>
+                <p>To reset your password, please click on the link below:</p>
+                <p style="text-align: center;">
+                    <a href="{reset_link}" style="display: inline-block; padding: 10px 20px; background-color: #2e8b57; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a>
+                </p>
+                <p>This link will expire in 24 hours.</p>
+                <p>If you did not request a password reset, please ignore this email or contact us if you have concerns.</p>
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; font-size: 0.8em; color: #666;">
+                    <p>CarbonTally - Empowering Tree Monitoring and Climate Action</p>
+                    <p>If you have any questions, please contact us at <a href="mailto:okothbasil45@gmail.com" style="color: #2e8b57;">okothbasil45@gmail.com</a></p>
+                </div>
             </div>
         </body>
         </html>
@@ -88,304 +102,388 @@ EMAIL_TEMPLATES = {
     }
 }
 
-# --- Firebase Initialization ---
-
-def initialize_firebase_auth():
-    """Initializes Firebase app with credentials from Streamlit secrets."""
+def initialize_firebase():
+    """Initialize Firebase Admin SDK if not already initialized"""
     try:
         if not firebase_admin._apps:
-            # Attempt to load Firebase credentials from Streamlit secrets
-            firebase_config = {
-                "type": st.secrets["FIREBASE"]["TYPE"],
-                "project_id": st.secrets["FIREBASE"]["PROJECT_ID"],
-                "private_key_id": st.secrets["FIREBASE"]["PRIVATE_KEY_ID"],
-                "private_key": st.secrets["FIREBASE"]["PRIVATE_KEY"].replace('\\n', '\n'), # Handle newline characters
-                "client_email": st.secrets["FIREBASE"]["CLIENT_EMAIL"],
-                "client_id": st.secrets["FIREBASE"]["CLIENT_ID"],
-                "auth_uri": st.secrets["FIREBASE"]["AUTH_URI"],
-                "token_uri": st.secrets["FIREBASE"]["TOKEN_URI"],
-                "auth_provider_x509_cert_url": st.secrets["FIREBASE"]["AUTH_PROVIDER_X509_CERT_URL"],
-                "client_x509_cert_url": st.secrets["FIREBASE"]["CLIENT_X509_CERT_URL"],
-                "universe_domain": st.secrets["FIREBASE"]["UNIVERSE_DOMAIN"]
-            }
+            try:
+                # Load Firebase config from Streamlit secrets
+                firebase_config = {
+                    "type": st.secrets["FIREBASE_CONFIG"]["type"],
+                    "project_id": st.secrets["FIREBASE_CONFIG"]["project_id"],
+                    "private_key_id": st.secrets["FIREBASE_CONFIG"]["private_key_id"],
+                    "private_key": st.secrets["FIREBASE_CONFIG"]["private_key"].replace('\\n', '\n'),
+                    "client_email": st.secrets["FIREBASE_CONFIG"]["client_email"],
+                    "client_id": st.secrets["FIREBASE_CONFIG"]["client_id"],
+                    "auth_uri": st.secrets["FIREBASE_CONFIG"]["auth_uri"],
+                    "token_uri": st.secrets["FIREBASE_CONFIG"]["token_uri"],
+                    "auth_provider_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["auth_provider_x509_cert_url"],
+                    "client_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["client_x509_cert_url"]
+                }
+            except Exception as e:
+                st.error(f"Error loading Firebase configuration: {str(e)}")
+                show_firebase_setup_guide()
+                return None
+
+            # Initialize Firebase app
             cred = credentials.Certificate(firebase_config)
             firebase_admin.initialize_app(cred)
-            logger.info("Firebase app initialized successfully.")
-        return True
-    except KeyError as e:
-        st.error(f"Firebase configuration missing in secrets.toml: {e}. Please ensure FIREBASE section is correctly set up.")
-        logger.error(f"Firebase config KeyError: {e}")
-        return False
+
+        # Initialize Firestore
+        db = firestore.client()
+
+        # Cache in session state
+        if 'firebase_db' not in st.session_state:
+            st.session_state.firebase_db = db
+
+        return db
+
     except Exception as e:
-        st.error(f"Error initializing Firebase: {e}")
-        logger.error(f"Firebase initialization error: {e}", exc_info=True)
-        return False
+        st.error(f"Firebase initialization failed: {str(e)}")
+        show_firebase_setup_guide()
+        return None
 
-# --- Database for user roles/approvals (using SQLite alongside Firebase) ---
-def initialize_user_db():
-    """Initialize a simple SQLite DB for user roles and approval status."""
-    DATA_DIR.mkdir(exist_ok=True, parents=True)
-    conn = sqlite3.connect(SQLITE_DB)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            uid TEXT PRIMARY KEY,
-            email TEXT UNIQUE,
-            username TEXT,
-            role TEXT,
-            approved INTEGER DEFAULT 0,
-            creation_date TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info("User database initialized.")
-
-# Call user DB initialization
-initialize_user_db()
-
-def update_user_in_db(uid, email, username, role, approved=0):
-    """Updates or inserts user information in the local SQLite database."""
-    conn = sqlite3.connect(SQLITE_DB)
-    c = conn.cursor()
-    creation_date = datetime.datetime.now().isoformat()
+def add_institution_to_db(firebase_uid: str, full_name: str):
+    """Adds a new participant record to the SQLite database."""
+    conn = None
     try:
-        c.execute('''
-            INSERT OR REPLACE INTO users (uid, email, username, role, approved, creation_date)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (uid, email, username, role, approved, creation_date))
+        conn = sqlite3.connect(SQLITE_DB)
+        c = conn.cursor()
+        join_date = datetime.date.today().isoformat()
+        c.execute("INSERT INTO institutions (id, name, join_date) VALUES (?, ?, ?)",
+                 (firebase_uid, full_name, join_date))
         conn.commit()
-        logger.info(f"User {email} updated/inserted in local DB with role {role}, approved: {approved}")
+        logger.info(f"Participant '{full_name}' ({firebase_uid}) added to institutions table")
+    except sqlite3.IntegrityError:
+        logger.warning(f"Participant with ID {firebase_uid} already exists in institutions table")
     except Exception as e:
-        logger.error(f"Error updating user {email} in local DB: {e}")
+        logger.error(f"Error adding participant '{full_name}' to institutions database: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
-def get_user_from_db(uid):
-    """Fetches user details from the local SQLite database by UID."""
-    conn = sqlite3.connect(SQLITE_DB)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE uid = ?", (uid,))
-    user_data = c.fetchone()
-    conn.close()
-    if user_data:
-        # Assuming the order: uid, email, username, role, approved, creation_date
-        return {
-            "uid": user_data[0],
-            "email": user_data[1],
-            "username": user_data[2],
-            "role": user_data[3],
-            "approved": bool(user_data[4]), # Convert 0/1 to False/True
-            "creation_date": user_data[5]
-        }
-    return None
-
-def get_all_users_from_db():
-    """Fetches all users from the local SQLite database."""
-    conn = sqlite3.connect(SQLITE_DB)
-    df = pd.read_sql_query("SELECT uid, email, username, role, approved FROM users", conn)
-    conn.close()
-    return df
-
-def delete_user_from_db(uid):
-    """Deletes a user from the local SQLite database."""
-    conn = sqlite3.connect(SQLITE_DB)
-    c = conn.cursor()
-    c.execute("DELETE FROM users WHERE uid = ?", (uid,))
-    conn.commit()
-    conn.close()
-    logger.info(f"User {uid} deleted from local DB.")
-
-
-# --- Email Sending Function ---
-def send_email(to_email, subject, body):
-    """Sends an email using configurations from Streamlit secrets."""
+def send_email(recipient_email, subject, html_content):
+    """Send an email using SMTP settings from secrets.toml"""
     try:
-        sender_email = st.secrets["EMAIL"]["EMAIL_ADDRESS"]
-        sender_password = st.secrets["EMAIL"]["EMAIL_PASSWORD"]
-
-        msg = MIMEMultipart("alternative")
-        msg["From"] = sender_email
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "html"))
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp: # Using SSL for gmail
-            smtp.login(sender_email, sender_password)
-            smtp.send_message(msg)
-        logger.info(f"Email sent to {to_email} with subject: {subject}")
-        return True
-    except KeyError:
-        st.warning("Email configuration missing in secrets.toml. Email notifications disabled.")
-        logger.warning("Email configuration missing in secrets.toml.")
-        return False
-    except Exception as e:
-        st.error(f"Failed to send email to {to_email}: {e}. Check email credentials or app password.")
-        logger.error(f"Email sending failed to {to_email}: {e}", exc_info=True)
-        return False
-
-# --- Firebase Authentication Functions ---
-
-def firebase_login(email, password):
-    """Handles Firebase user login."""
-    try:
-        user = auth.get_user_by_email(email)
-        # Verify password (Firebase Admin SDK doesn't directly verify password,
-        # usually done client-side or by creating custom token.
-        # For simplicity, we assume if get_user_by_email works, and the user exists,
-        # we then check local DB for approval status before marking authenticated.)
-        # A more robust solution would involve Firebase Client SDK for password validation.
-
-        user_in_db = get_user_from_db(user.uid)
-        if user_in_db and user_in_db["approved"]:
-            st.session_state.authenticated = True
-            st.session_state.user = user_in_db # Store user details from DB
-            st.success(f"Logged in as {user_in_db['username']} ({user_in_db['role']})")
-            logger.info(f"User {email} logged in successfully.")
-            return True
-        elif user_in_db and not user_in_db["approved"]:
-            st.warning("Your account is awaiting admin approval. Please try again later.")
-            logger.info(f"Login attempt for {email}: Awaiting admin approval.")
-            return False
-        else:
-            st.error("User not found in database or not approved.")
-            logger.warning(f"Login attempt for {email}: User not found in DB or not approved.")
-            return False
-
-    except exceptions.FirebaseError as e:
-        error_code = e.code
-        if error_code == 'auth/user-not-found':
-            st.error("Invalid email or password.")
-        elif error_code == 'auth/wrong-password': # This might not be hit if we don't do client-side auth
-            st.error("Invalid email or password.")
-        else:
-            st.error(f"Login failed: {e}")
-        logger.error(f"Firebase login error for {email}: {e}")
-        return False
-    except Exception as e:
-        st.error(f"An unexpected error occurred during login: {e}")
-        logger.error(f"Unexpected error during login for {email}: {e}", exc_info=True)
-        return False
-
-
-def firebase_register(email, password, username, role):
-    """Registers a new user with Firebase and sets their approval status."""
-    try:
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            st.error("Invalid email format.")
-            return False
-        if len(password) < 6:
-            st.error("Password must be at least 6 characters.")
-            return False
-
-        user = auth.create_user(email=email, password=password, display_name=username)
-        # Default to unapproved, admin must approve
-        update_user_in_db(user.uid, email, username, role, approved=0)
+        # Get SMTP settings from secrets.toml
+        smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+        smtp_username = st.secrets.get("SMTP_USERNAME", "")
+        smtp_password = st.secrets.get("SMTP_PASSWORD", "")
+        sender_email = st.secrets.get("SMTP_SENDER", smtp_username)
         
-        st.success(f"Account created for {username} ({email}). Awaiting admin approval.")
-        logger.info(f"New user registered: {email} with UID {user.uid}. Role: {role}. Awaiting approval.")
+        if not smtp_username or not smtp_password:
+            logger.warning("SMTP credentials not found in secrets.toml. Email not sent.")
+            return False
+            
+        # Create message
+        message = MIMEMultipart("alternative")
+        message["Subject"] = subject
+        message["From"] = sender_email
+        message["To"] = recipient_email
+        
+        # Attach HTML content
+        html_part = MIMEText(html_content, "html")
+        message.attach(html_part)
+        
+        # Send email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.sendmail(sender_email, recipient_email, message.as_string())
+            
+        logger.info(f"Email sent successfully to {recipient_email}")
         return True
-    except exceptions.FirebaseError as e:
-        error_code = e.code
-        if error_code == 'auth/email-already-exists':
-            st.error("This email is already registered.")
-        else:
-            st.error(f"Registration failed: {e}")
-        logger.error(f"Firebase registration error for {email}: {e}")
-        return False
+        
     except Exception as e:
-        st.error(f"An unexpected error occurred during registration: {e}")
-        logger.error(f"Unexpected error during registration for {email}: {e}", exc_info=True)
+        logger.error(f"Failed to send email: {str(e)}")
+        return False
+
+def send_approval_email(user_data):
+    """Send approval email to user"""
+    try:
+        recipient_email = user_data.get("email")
+        full_name = user_data.get("fullName", "User")
+        tracking_number = user_data.get("treeTrackingNumber", "")
+        
+        # Get app URL from secrets or use default
+        app_url = st.secrets.get("APP_URL", "https://carbontally.app")
+        
+        # Format email template
+        template = EMAIL_TEMPLATES["approval"]
+        subject = template["subject"]
+        body = template["body"].format(
+            fullName=full_name,
+            treeTrackingNumber=tracking_number,
+            app_url=app_url
+        )
+        
+        # Send email
+        return send_email(recipient_email, subject, body)
+        
+    except Exception as e:
+        logger.error(f"Failed to send approval email: {str(e)}")
+        return False
+
+def send_rejection_email(user_data):
+    """Send rejection email to user"""
+    try:
+        recipient_email = user_data.get("email")
+        full_name = user_data.get("fullName", "User")
+        
+        # Format email template
+        template = EMAIL_TEMPLATES["rejection"]
+        subject = template["subject"]
+        body = template["body"].format(fullName=full_name)
+        
+        # Send email
+        return send_email(recipient_email, subject, body)
+        
+    except Exception as e:
+        logger.error(f"Failed to send rejection email: {str(e)}")
         return False
 
 def send_password_reset_email(email):
-    """Sends a password reset email via Firebase."""
+    """Send password reset email to user"""
     try:
-        # Firebase Admin SDK does not directly send password reset emails
-        # This typically requires the client-side SDK.
-        # As a workaround, we could use a custom email service if needed,
-        # but for Firebase integration, direct password reset is usually client-side.
-        # If using a custom email service, you'd generate a token yourself.
-
-        # For a basic user experience, we can inform the user how to reset.
-        st.info("Password reset is handled directly by Firebase's client-side SDK for security reasons. "
-                "Please use the 'Forgot Password' option on your app's login screen which implements the Firebase client SDK, "
-                "or visit the Firebase console if you are an admin.")
+        # Generate password reset link using Firebase Auth
+        reset_link = generate_password_reset_link(email)
         
-        # If you were to implement email sending via your own SMTP (less secure for this purpose):
-        # user_data = auth.get_user_by_email(email)
-        # user_in_db = get_user_from_db(user_data.uid)
-        # username = user_in_db.get('username', 'User') if user_in_db else 'User'
-        # subject = EMAIL_TEMPLATES["password_reset_success"]["subject"]
-        # body = EMAIL_TEMPLATES["password_reset_success"]["body"].format(username=username, email=email)
-        # return send_email(email, subject, body)
-        return True # Indicate user was informed
-    except exceptions.FirebaseError as e:
-        st.error(f"Firebase error sending reset email: {e}")
-        logger.error(f"Firebase password reset email error for {email}: {e}")
-        return False
+        if not reset_link:
+            logger.error(f"Failed to generate password reset link for {email}")
+            return False
+            
+        # Format email template
+        template = EMAIL_TEMPLATES["password_reset"]
+        subject = template["subject"]
+        body = template["body"].format(reset_link=reset_link)
+        
+        # Send email
+        return send_email(email, subject, body)
+        
     except Exception as e:
-        st.error(f"An unexpected error occurred while processing password reset: {e}")
-        logger.error(f"Unexpected error during password reset for {email}: {e}", exc_info=True)
+        logger.error(f"Failed to send password reset email: {str(e)}")
         return False
 
-def display_user_management():
-    """Displays UI for admin to approve/reject users."""
-    st.subheader("User Account Approval")
-    
-    df_users = get_all_users_from_db()
+def generate_password_reset_link(email):
+    """Generate a password reset link using Firebase Auth"""
+    try:
+        # Get app URL from secrets or use default
+        app_url = st.secrets.get("APP_URL", "https://carbontally.app")
+        
+        # Generate action code settings
+        action_code_settings = auth.ActionCodeSettings(
+            url=f"{app_url}/reset-password",
+            handle_code_in_app=True
+        )
+        
+        # Generate password reset link
+        reset_link = auth.generate_password_reset_link(
+            email, 
+            action_code_settings
+        )
+        
+        return reset_link
+        
+    except Exception as e:
+        logger.error(f"Failed to generate password reset link: {str(e)}")
+        return None
 
-    if df_users.empty:
-        st.info("No user accounts found in the database.")
+def firebase_login_ui():
+    """Display Firebase login UI and handle authentication"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Login to Your Account</h3>", unsafe_allow_html=True)
+    
+    with st.form("firebase_login_form"):
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        submitted = st.form_submit_button("Login", use_container_width=True)
+        
+        if submitted:
+            if not email or not password:
+                st.warning("Please enter both email and password")
+            else:
+                try:
+                    user_record = auth.get_user_by_email(email)
+                    
+                    db = st.session_state.firebase_db
+                    user_doc = db.collection('users').document(user_record.uid).get()
+                    
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        
+                        # Check if user is approved
+                        if user_data.get('status') != 'approved':
+                            st.error("Your account is pending approval. Please wait for admin approval.")
+                            return
+                        
+                        # Store ALL required user data in session state
+                        st.session_state.user = {
+                            'uid': user_record.uid,
+                            'email': user_record.email,
+                            'username': user_data.get('username', user_record.email.split('@')[0]),
+                            'displayName': user_data.get('fullName', 'User'),
+                            'role': user_data.get('role', 'individual'),
+                            'user_type': user_data.get('role', 'individual'),
+                            'institution': user_data.get('institution', ''),
+                            'treeTrackingNumber': user_data.get('treeTrackingNumber', '')
+                        }
+                        
+                        st.session_state.authenticated = True
+                        
+                        # Set appropriate page based on role
+                        if user_data.get('role') == 'admin':
+                            st.session_state.page = "Admin Dashboard"
+                        else:
+                            st.session_state.page = "User Dashboard"
+                        
+                        st.success(f"Welcome {user_data.get('fullName', 'User')}!")
+                        st.rerun()
+                    else:
+                        st.error("User profile not found in Firestore. Please contact support.")
+                except exceptions.FirebaseError as e:
+                    st.error(f"Firebase error: {e}")
+                except Exception as e:
+                    st.error(f"An unexpected error occurred: {e}")
+
+def firebase_signup_ui():
+    """Display Firebase signup UI and handle new user registration"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Create New Account</h3>", unsafe_allow_html=True)
+
+    with st.form("firebase_signup_form"):
+        email = st.text_input("Email", key="signup_email")
+        password = st.text_input("Password", type="password", key="signup_password")
+        confirm_password = st.text_input("Confirm Password", type="password", key="signup_confirm_password")
+        full_name = st.text_input("Full Name", key="signup_full_name")
+        user_type = st.selectbox("Account Type", options=["individual", "institution"], key="signup_user_type")
+        institution_name = ""
+        if user_type == "institution":
+            institution_name = st.text_input("Institution Name", key="signup_institution_name")
+
+        submitted = st.form_submit_button("Register", use_container_width=True)
+
+        if submitted:
+            if not email or not password or not confirm_password or not full_name:
+                st.warning("Please fill in all required fields.")
+            elif password != confirm_password:
+                st.error("Passwords do not match.")
+            elif len(password) < 6:
+                st.error("Password must be at least 6 characters long.")
+            elif user_type == "institution" and not institution_name:
+                st.warning("Please enter institution name for institution account type.")
+            else:
+                try:
+                    # Create user in Firebase Authentication
+                    user = auth.create_user(email=email, password=password)
+                    
+                    # Generate a unique tree tracking number
+                    tree_tracking_number = f"CT-{uuid.uuid4().hex[:8].upper()}"
+
+                    # Save user data to Firestore with pending status
+                    db = st.session_state.firebase_db
+                    user_ref = db.collection('users').document(user.uid)
+                    user_data = {
+                        'email': email,
+                        'fullName': full_name,
+                        'role': user_type,
+                        'status': 'pending',
+                        'createdAt': firestore.SERVER_TIMESTAMP,
+                        'treeTrackingNumber': tree_tracking_number
+                    }
+                    if user_type == "institution":
+                        user_data['institution'] = institution_name
+                    
+                    user_ref.set(user_data)
+
+                    # Add user to the SQLite 'institutions' table for landing page count
+                    if user_type in ['individual', 'institution']:
+                        add_institution_to_db(user.uid, full_name)
+
+                    st.success("Account created successfully! Your account is pending admin approval. You will receive an email once approved.")
+                    logger.info(f"New user registered: {email} (UID: {user.uid})")
+                    time.sleep(5)
+                    st.session_state.page = "Login"
+                    st.rerun()
+
+                except exceptions.FirebaseError as e:
+                    if "EMAIL_EXISTS" in str(e):
+                        st.error("This email is already registered.")
+                    else:
+                        st.error(f"Firebase error: {e}")
+                except Exception as e:
+                    st.error(f"An unexpected error occurred: {e}")
+
+def firebase_password_recovery_ui():
+    """Display Firebase password recovery UI"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Password Recovery</h3>", unsafe_allow_html=True)
+
+    with st.form("firebase_password_recovery_form"):
+        email = st.text_input("Enter your email", key="recovery_email")
+        submitted = st.form_submit_button("Send Reset Link", use_container_width=True)
+
+        if submitted:
+            if not email:
+                st.warning("Please enter your email address.")
+            else:
+                try:
+                    send_password_reset_email(email)
+                    st.success("If an account with that email exists, a password reset link has been sent.")
+                except Exception as e:
+                    st.error(f"Error sending password reset email: {e}")
+
+def firebase_admin_approval_ui():
+    """Display UI for admin to approve/reject pending user accounts"""
+    st.markdown("<h3 style='text-align: center; color: #1D7749;'>Admin User Approval</h3>", unsafe_allow_html=True)
+
+    db = initialize_firebase()
+    if not db:
+        st.error("Firebase not initialized. Cannot load pending users.")
         return
 
-    st.dataframe(df_users, use_container_width=True)
+    pending_users_ref = db.collection('users').where('status', '==', 'pending')
+    pending_users = pending_users_ref.stream()
 
-    pending_users = df_users[df_users['approved'] == 0]
+    pending_users_list = []
+    for user_doc in pending_users:
+        user_data = user_doc.to_dict()
+        user_data['uid'] = user_doc.id
+        pending_users_list.append(user_data)
 
-    if not pending_users.empty:
-        st.markdown("---")
-        st.subheader("Pending Approvals")
-        for index, user_data in pending_users.iterrows():
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 1, 1])
+    if not pending_users_list:
+        st.info("No pending user accounts for approval.")
+        return
+
+    st.write(f"Found {len(pending_users_list)} pending user(s).")
+
+    for user_data in pending_users_list:
+        with st.expander(f"Pending User: {user_data.get('fullName', 'N/A')} ({user_data.get('email', 'N/A')})"):
+            st.write(f"**Email:** {user_data.get('email')}")
+            st.write(f"**Full Name:** {user_data.get('fullName')}")
+            st.write(f"**Account Type:** {user_data.get('role')}")
+            if user_data.get('role') == 'institution':
+                st.write(f"**Institution:** {user_data.get('institution')}")
+            st.write(f"**Tree Tracking Number:** {user_data.get('treeTrackingNumber', 'N/A')}")
+            st.write(f"**Registered At:** {user_data.get('createdAt').strftime('%Y-%m-%d %H:%M:%S') if user_data.get('createdAt') else 'N/A'}")
+
+            col1, col2 = st.columns(2)
             with col1:
-                st.write(f"**Email:** {user_data['email']}")
-            with col2:
-                st.write(f"**Username:** {user_data['username']}")
-            with col3:
-                st.write(f"**Role:** {user_data['role']}")
-            with col4:
-                if st.button(f"Approve {user_data['username']}", key=f"approve_{user_data['uid']}"):
+                if st.button(f"Approve {user_data['email']}", key=f"approve_{user_data['uid']}", use_container_width=True):
                     try:
-                        # Update Firebase user custom claims (optional, for role)
-                        # auth.set_custom_user_claims(user_data['uid'], {'role': user_data['role']})
-                        update_user_in_db(user_data['uid'], user_data['email'], user_data['username'], user_data['role'], approved=1)
-                        if send_email(user_data['email'],
-                                      EMAIL_TEMPLATES["approval"]["subject"],
-                                      EMAIL_TEMPLATES["approval"]["body"].format(username=user_data['username'])):
-                            st.success(f"User {user_data['username']} approved and email sent.")
-                        else:
-                            st.success(f"User {user_data['username']} approved (email failed).")
-                        st.experimental_rerun()
+                        db.collection('users').document(user_data['uid']).update({'status': 'approved'})
+                        send_approval_email(user_data)
+                        st.success(f"User {user_data['email']} approved and email sent.")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error approving user: {e}")
-            with col5:
-                if st.button(f"Reject {user_data['username']}", key=f"reject_{user_data['uid']}"):
+            with col2:
+                if st.button(f"Reject {user_data['email']}", key=f"reject_{user_data['uid']}", use_container_width=True):
                     try:
-                        # Optionally delete from Firebase Auth, or just mark as rejected
-                        auth.delete_user(user_data['uid']) # Deletes user from Firebase Auth
-                        delete_user_from_db(user_data['uid']) # Delete from local DB
-                        if send_email(user_data['email'],
-                                      EMAIL_TEMPLATES["rejection"]["subject"],
-                                      EMAIL_TEMPLATES["rejection"]["body"].format(username=user_data['username'])):
-                            st.warning(f"User {user_data['username']} rejected and email sent.")
-                        else:
-                            st.warning(f"User {user_data['username']} rejected (email failed).")
-                        st.experimental_rerun()
+                        auth.delete_user(user_data['uid'])
+                        db.collection('users').document(user_data['uid']).delete()
+                        send_rejection_email(user_data)
+                        st.warning(f"User {user_data['email']} rejected and account deleted.")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error rejecting user: {e}")
-    else:
-        st.info("No pending user approvals.")
 
 def firebase_logout():
     """Handle Firebase user logout"""
@@ -393,10 +491,10 @@ def firebase_logout():
         del st.session_state.authenticated
     if 'user' in st.session_state:
         del st.session_state.user
-    if 'page' in st.session_state: # Clear page state to redirect to home/login
+    if 'page' in st.session_state:
         del st.session_state.page
     st.info("Logged out successfully.")
-    st.experimental_rerun() # Rerun to clear session state and redirect
+    st.rerun()
 
 def get_current_firebase_user():
     """Get the current authenticated Firebase user from session state"""
@@ -412,124 +510,32 @@ def show_firebase_setup_guide():
     """Display instructions for setting up Firebase"""
     st.markdown("""
     ## Firebase Setup Guide
-
-    To get Firebase authentication working, you need to configure your Firebase project and add its credentials to Streamlit's secrets.toml:
-
-    1.  **Go to the [Firebase Console](https://console.firebase.google.com/)**
-    2.  **Create a new project** or select an existing one.
-    3.  **Enable Authentication:**
-        * Navigate to **Build > Authentication** in the left sidebar.
-        * Go to the **Sign-in method** tab.
-        * Enable the **Email/Password** provider.
-    4.  **Create a Service Account:**
-        * Go to **Project settings** (the gear icon next to "Project Overview").
-        * Select the **Service accounts** tab.
-        * Click on **Generate new private key** and download the JSON file. This file contains your Firebase credentials.
-    5.  **Configure `secrets.toml`:**
-        * Create a `.streamlit` folder in your project's root directory if it doesn't exist.
-        * Inside `.streamlit`, create a file named `secrets.toml`.
-        * Copy the content of the downloaded JSON file into your `secrets.toml` under a `[FIREBASE]` section. Make sure to replace newline characters (`\n`) in the `private_key` field with actual newlines if you're pasting it directly into Streamlit Cloud's secrets management, or escape them (`\\n`) if writing directly to `secrets.toml` locally.
-        * **Example `secrets.toml` structure (important for Streamlit Cloud):**
-            ```toml
-            # .streamlit/secrets.toml
-
-            [FIREBASE]
-            TYPE="your_firebase_type"
-            PROJECT_ID="your_firebase_project_id"
-            PRIVATE_KEY_ID="your_firebase_private_key_id"
-            PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_VERY_LONG_PRIVATE_KEY_VALUE_HERE\n-----END PRIVATE KEY-----\n"
-            CLIENT_EMAIL="your_client_email"
-            CLIENT_ID="your_client_id"
-            AUTH_URI="your_auth_uri"
-            TOKEN_URI="your_token_uri"
-            AUTH_PROVIDER_X509_CERT_URL="your_auth_provider_x509_cert_url"
-            CLIENT_X509_CERT_URL="your_client_x509_cert_url"
-            UNIVERSE_DOMAIN="your_universe_domain"
-
-            [KOBO]
-            API_TOKEN="your_kobo_api_token"
-            KOBO_ASSET_ID="your_planting_form_asset_uid"
-            KOBO_MONITORING_ASSET_ID="your_monitoring_form_asset_uid"
-
-            [EMAIL]
-            EMAIL_ADDRESS="your_sender_email@example.com"
-            EMAIL_PASSWORD="your_sender_email_password_or_app_password"
-            ```
-            (Remember to replace `YOUR_VERY_LONG_PRIVATE_KEY_VALUE_HERE` with your actual private key. For `PRIVATE_KEY` in Streamlit Cloud, you need to manually add the newlines.)
-
-    6.  **Ensure Email Configuration:** If you plan to use email notifications (for account approval/rejection or password reset emails if you implement them yourself), ensure you have the `[EMAIL]` section correctly configured in `secrets.toml` with your sender email address and password (or app password for Gmail).
-    7.  **Dependencies:** Make sure you have `firebase-admin` and `streamlit` installed (`pip install firebase-admin streamlit`).
-
-    Once you have configured `secrets.toml` and restarted your Streamlit app, Firebase should initialize correctly.
+    
+    1. Go to the [Firebase Console](https://console.firebase.google.com/)
+    2. Create a new project or select an existing one
+    3. Enable Authentication (Email/Password provider)
+    4. Go to Project Settings > Service Accounts
+    5. Generate a new private key (JSON) and download it
+    6. Add the JSON content to your Streamlit secrets under 'FIREBASE_CONFIG'
+    
+    For detailed instructions, see the [Firebase documentation](https://firebase.google.com/docs/admin/setup)
     """)
+    st.stop()
 
-# For local testing (ensure you have a secrets.toml or mock secrets for testing this file directly)
 if __name__ == "__main__":
     st.set_page_config(page_title="Firebase Auth Test", layout="centered")
-
-    st.title("Firebase Authentication Test Module")
-
-    # Initialize Firebase if not already
-    if 'firebase_initialized' not in st.session_state:
-        st.session_state.firebase_initialized = initialize_firebase_auth()
-
-    if not st.session_state.firebase_initialized:
-        st.error("Firebase is not initialized. Check your secrets.toml.")
-        show_firebase_setup_guide()
-        st.stop() # Stop further execution if Firebase isn't ready
-
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'user' not in st.session_state:
-        st.session_state.user = None
-
-    menu = ["Login", "Register", "Password Reset", "User Management (Admin)", "Logout", "Firebase Setup Guide"]
-    choice = st.sidebar.selectbox("Menu", menu)
-
-    if choice == "Login":
-        st.subheader("Login")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type='password')
-        if st.button("Login"):
-            firebase_login(email, password)
-            if st.session_state.authenticated:
-                st.write(f"Welcome, {st.session_state.user['username']}! Your role is {st.session_state.user['role']}.")
+    st.title("Firebase Authentication Test")
     
-    elif choice == "Register":
-        st.subheader("Register New Account")
-        username = st.text_input("Username")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type='password')
-        role = st.selectbox("Role", ["user", "planter"])
-        if st.button("Register"):
-            firebase_register(email, password, username, role)
-
-    elif choice == "Password Reset":
-        st.subheader("Send Password Reset Email")
-        email = st.text_input("Enter your registered email")
-        if st.button("Send Reset Link"):
-            send_password_reset_email(email)
-
-    elif choice == "User Management (Admin)":
-        st.subheader("Admin: User Management")
-        if st.session_state.authenticated and check_firebase_user_role(st.session_state.user, 'admin'):
-            display_user_management()
-        else:
-            st.warning("You must be logged in as an admin to access this section.")
-            st.info("To test: manually set st.session_state.user = {'uid': 'test_admin_uid', 'email': 'admin@example.com', 'role': 'admin', 'approved': True} and st.session_state.authenticated = True")
-
-
-    elif choice == "Logout":
-        if st.session_state.authenticated:
-            if st.button("Logout"):
-                firebase_logout()
-        else:
-            st.info("Not logged in.")
-            
-    elif choice == "Firebase Setup Guide":
-        show_firebase_setup_guide()
-
-    st.markdown("---")
-    st.subheader("Current Session State")
-    st.write(st.session_state.get('authenticated'))
-    st.write(st.session_state.get('user'))
+    if 'firebase_db' not in st.session_state:
+        initialize_firebase()
+    
+    menu = st.sidebar.selectbox("Menu", ["Login", "Sign Up", "Password Recovery", "Admin Approval"])
+    
+    if menu == "Login":
+        firebase_login_ui()
+    elif menu == "Sign Up":
+        firebase_signup_ui()
+    elif menu == "Password Recovery":
+        firebase_password_recovery_ui()
+    elif menu == "Admin Approval":
+        firebase_admin_approval_ui()
