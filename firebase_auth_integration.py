@@ -31,27 +31,24 @@ def initialize_firebase():
         st.error(f"Firebase initialization failed: {str(e)}")
         return None
 
-# Alias for backward compatibility
-def get_current_firebase_user() -> Optional[Dict[str, Any]]:
-    """Alias for get_current_user (legacy support)"""
-    return get_current_user()
-
+# Get current user from session
 def get_current_user() -> Optional[Dict[str, Any]]:
-    """Get current authenticated user from session"""
     return st.session_state.get('user')
 
+# For legacy support
+def get_current_firebase_user() -> Optional[Dict[str, Any]]:
+    return get_current_user()
+
 def check_auth() -> bool:
-    """Check if user is authenticated"""
     return st.session_state.get('authenticated', False)
 
 def check_firebase_user_role(user: Dict[str, Any], required_role: str) -> bool:
-    """Check if user has required role"""
     if not user:
         return False
     return user.get('role') == required_role
 
+# Login UI
 def firebase_login_ui():
-    """Render login UI"""
     st.title("🔐 Login")
 
     with st.form("login_form"):
@@ -66,7 +63,7 @@ def firebase_login_ui():
                     'uid': user.uid,
                     'email': user.email,
                     'displayName': user.display_name or email.split('@')[0],
-                    'role': user.custom_claims.get('role', 'individual')
+                    'role': (user.custom_claims or {}).get('role', 'individual')  # ✅ FIXED
                 }
                 st.session_state.authenticated = True
                 st.success("Login successful!")
@@ -74,8 +71,8 @@ def firebase_login_ui():
             except FirebaseError as e:
                 st.error(f"Login failed: {e}")
 
+# Signup UI
 def firebase_signup_ui():
-    """Render signup UI"""
     st.title("📝 Sign Up")
 
     with st.form("signup_form"):
@@ -109,8 +106,8 @@ def firebase_signup_ui():
             except FirebaseError as e:
                 st.error(f"Signup failed: {e}")
 
+# Password Recovery UI
 def firebase_password_recovery_ui():
-    """Render password recovery UI"""
     st.title("🔒 Password Recovery")
 
     with st.form("recovery_form"):
@@ -125,8 +122,8 @@ def firebase_password_recovery_ui():
             except FirebaseError as e:
                 st.error(f"Password reset failed: {e}")
 
+# Admin approval interface
 def firebase_admin_approval_ui():
-    """Render admin approval UI"""
     user = get_current_user()
     if not check_firebase_user_role(user, "admin"):
         st.warning("Admin access required")
@@ -146,18 +143,16 @@ def firebase_admin_approval_ui():
                 st.success(f"Approved {user_data.get('email')}")
                 st.rerun()
 
+# Logout handler
 def firebase_logout():
-    """Handle user logout"""
     for key in ['user', 'authenticated']:
         if key in st.session_state:
             del st.session_state[key]
     st.success("Logged out successfully!")
     st.rerun()
 
+# Firebase Setup Guide
 def show_firebase_setup_guide():
-    """
-    Displays a guide for setting up Firebase credentials using Streamlit secrets.
-    """
     st.markdown("""
     ### 🔧 Firebase Setup Guide
 
@@ -170,7 +165,7 @@ def show_firebase_setup_guide():
     3. Click **"Generate New Private Key"** and save the `.json` file.
     4. In your Streamlit Cloud dashboard:
        - Go to **"Advanced settings" → "Secrets"**.
-       - Paste the full JSON content under a `firebase` key like this:
+       - Paste the full JSON content under a `[firebase]` block like this:
          ```
          [firebase]
          type = "service_account"
