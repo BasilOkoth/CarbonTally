@@ -560,3 +560,18 @@ def check_firebase_user_role(user, role):
         return user['role'] == role
     return False
 
+def show_firebase_setup_guide():
+    """Display instructions for setting up Firebase"""
+    st.markdown("""
+    ## Firebase Setup Guide
+    
+    1. Go to the [Firebase Console](https://console.firebase.google.com/)
+    2. Create a new project or select an existing one
+    3. Enable Authentication (Email/Password provider)
+    4. Go to Project Settings > Service Accounts
+    5. Generate a new private key (JSON) and download it
+    6. Add the JSON content to your Streamlit secrets under 'FIREBASE_CONFIG'
+    
+    For detailed instructions, see the [Firebase documentation](https://firebase.google.com/docs/admin/setup)
+    """)
+    st.stop()  # Stop execution since Firebase isn't configured
