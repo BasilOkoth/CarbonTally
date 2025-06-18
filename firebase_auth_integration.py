@@ -113,10 +113,22 @@ def initialize_firebase():
     try:
         if not firebase_admin._apps:
             try:
-                # Use the hardcoded Firebase config
-                firebase_config = FIREBASE_CONFIG
+                # Load Firebase config from Streamlit secrets
+                firebase_config = {
+                    "type": st.secrets["FIREBASE_CONFIG"]["type"],
+                    "project_id": st.secrets["FIREBASE_CONFIG"]["project_id"],
+                    "private_key_id": st.secrets["FIREBASE_CONFIG"]["private_key_id"],
+                    "private_key": st.secrets["FIREBASE_CONFIG"]["private_key"].replace('\\n', '\n'),
+                    "client_email": st.secrets["FIREBASE_CONFIG"]["client_email"],
+                    "client_id": st.secrets["FIREBASE_CONFIG"]["client_id"],
+                    "auth_uri": st.secrets["FIREBASE_CONFIG"]["auth_uri"],
+                    "token_uri": st.secrets["FIREBASE_CONFIG"]["token_uri"],
+                    "auth_provider_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["auth_provider_x509_cert_url"],
+                    "client_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["client_x509_cert_url"]
+                }
             except Exception as e:
                 st.error(f"Error loading Firebase configuration: {str(e)}")
+                show_firebase_setup_guide()  # Show setup guide if config is missing
                 return None
 
             # Initialize Firebase app
@@ -134,9 +146,8 @@ def initialize_firebase():
 
     except Exception as e:
         st.error(f"Firebase initialization failed: {str(e)}")
-        st.info("Please ensure your Firebase configuration is correct.")
+        show_firebase_setup_guide()  # Show setup guide on initialization failure
         return None
-
 # NEW: Helper function to add institution to DB (copied from app.py for self-containment)
 def add_institution_to_db(firebase_uid: str, full_name: str):
     """Adds a new participant record to the SQLite database.
