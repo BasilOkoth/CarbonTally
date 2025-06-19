@@ -182,6 +182,8 @@ def validate_tracking_number(tracking_number):
 def map_kobo_to_database(kobo_data):
     """Map KoBo form fields to database columns"""
     try:
+        # DEBUG: Show the tracking number received from KoBo
+        st.write("Tracking number from KoBo:", kobo_data.get("tree_tracking_number"))
         # Get and validate Tree Tracking Number
         tracking_number = kobo_data.get("tree_tracking_number", "").strip()
         if not validate_tracking_number(tracking_number):
