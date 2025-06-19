@@ -114,7 +114,7 @@ def validate_user_session():
 
 def get_kobo_form_url():
     """Get the public URL for the KoBo tree planting form"""
-    short_code = st.secrets.get("KOBO_SHORT_FORM_CODE")  # use short code, e.g. 's8ntxUM5'
+    short_code = st.secrets.get("KOBO_ASSET_FORM_CODE")  # use short code, e.g. 's8ntxUM5'
     if not short_code:
         st.error("Form configuration missing. Please contact support.")
         return None
