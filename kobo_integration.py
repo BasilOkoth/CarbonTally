@@ -183,7 +183,7 @@ def map_kobo_to_database(kobo_data):
     """Map KoBo form fields to database columns"""
     try:
         # Get and validate Tree Tracking Number
-        tracking_number = kobo_data.get("Tree_Tracking_Number", "").strip()
+        tracking_number = kobo_data.get("tree_tracking_number", "").strip()
         if not validate_tracking_number(tracking_number):
             st.warning("Invalid Tree Tracking Number - must be at least 3 characters")
             return None
