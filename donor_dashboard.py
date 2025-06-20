@@ -15,6 +15,44 @@ BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
 DATA_DIR = BASE_DIR / "data"
 SQLITE_DB = DATA_DIR / "trees.db"
 
+# New function to initialize the donor database tables
+def initialize_donor_database():
+    """Initializes the donations and donated_trees tables."""
+    conn = sqlite3.connect(SQLITE_DB)
+    try:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS donations (
+                donation_id TEXT PRIMARY KEY,
+                donor_name TEXT,
+                donor_email TEXT,
+                institution_id TEXT, # Changed from institution to institution_id to match process_successful_donation
+                num_trees INTEGER,   # Added from process_successful_donation
+                amount REAL,
+                currency TEXT,
+                donation_date TEXT,
+                payment_status TEXT, # Added from process_successful_donation
+                message TEXT,        # Added from process_successful_donation
+                transaction_id TEXT UNIQUE
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS donated_trees (
+                donated_tree_id TEXT PRIMARY KEY,
+                donation_id TEXT,
+                tree_id TEXT, -- Link to a specific tree (optional, if tracking individual donated trees)
+                tree_count INTEGER,
+                FOREIGN KEY (donation_id) REFERENCES donations(donation_id)
+                -- FOREIGN KEY (tree_id) REFERENCES trees(tree_id) -- Uncomment if linking to specific trees
+            )
+        ''')
+        conn.commit()
+        # st.success("Donor database initialized successfully (donations, donated_trees tables).") # Can be noisy, uncomment for debug
+    except Exception as e:
+        st.error(f"Error initializing donor database: {e}")
+    finally:
+        conn.close()
+
 def donor_dashboard():
     """
     Main donor dashboard that can be accessed without login
@@ -130,7 +168,7 @@ def donation_section():
         
         st.markdown(f"""
         <div style="background-color: #f0f7f0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
-            <h4 style="margin-top:0; color: #1D7749;">Donation Details</h4>
+            <h4 style="margin-top:0; color: #1D7749;'>Donation Details</h4>
             <p><strong>Donation ID:</strong> {donation['donation_id']}</p>
             <p><strong>Institution:</strong> {donation['institution']}</p>
             <p><strong>Trees:</strong> {donation['num_trees']}</p>
@@ -236,7 +274,7 @@ def about_program_section():
     </div>
     
     <div style="background-color: #f0f7f0; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem;">
-        <h4 style="margin-top:0; color: #1D7749;">Environmental Impact</h4>
+        <h4 style="margin-top:0; color: #1D7749;'>Environmental Impact</h4>
         <p>Each tree planted through our program:</p>
         <ul>
             <li>Sequesters approximately 25kg of CO₂ per year when mature</li>
@@ -248,7 +286,7 @@ def about_program_section():
     </div>
     
     <div style="background-color: #f0f7f0; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem;">
-        <h4 style="margin-top:0; color: #1D7749;">Our Partners</h4>
+        <h4 style="margin-top:0; color: #1D7749;'>Our Partners</h4>
         <p>We work with various institutions including schools, community organizations, and environmental groups to plant trees in areas where they're most needed.</p>
         <p>All our partners are vetted to ensure they follow best practices for tree planting and maintenance.</p>
     </div>
@@ -291,7 +329,7 @@ def process_successful_donation(donation):
             donation["donation_id"],
             donation["donor_email"],
             donation["donor_name"],
-            donation["institution"],
+            donation["institution"], # This maps to institution_id in the table
             donation["num_trees"],
             donation["amount"],
             donation["currency"],
@@ -364,7 +402,7 @@ def show_donation_by_id(donation_id):
         
         st.markdown(f"""
         <div style="background-color: #f0f7f0; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem;">
-            <h4 style="margin-top:0; color: #1D7749;">Donation Details</h4>
+            <h4 style="margin-top:0; color: #1D7749;'>Donation Details</h4>
             <p><strong>Donation ID:</strong> {donation['donation_id']}</p>
             <p><strong>Donor:</strong> {donation['donor_name']}</p>
             <p><strong>Email:</strong> {donation['donor_email']}</p>
