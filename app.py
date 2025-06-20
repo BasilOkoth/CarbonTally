@@ -50,11 +50,14 @@ except ImportError:
 
 try:
     from firebase_auth_integration import (
-        firebase_login_ui, firebase_signup_ui, firebase_password_recovery_ui,
-        firebase_logout, get_current_firebase_user, check_firebase_user_role,
-        show_firebase_setup_guide, initialize_firebase,
-        admin_approval_dashboard
-    )
+    initialize_firebase,
+    firebase_login_ui,
+    firebase_signup_ui,
+    firebase_password_recovery_ui,
+    firebase_admin_approval_ui,
+    send_approval_email
+)
+
 except ImportError:
     st.error("Firebase Auth Integration module not found or missing functions. Please ensure firebase_auth_integration.py is correctly set up.")
     # Placeholder functions to prevent errors
