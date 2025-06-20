@@ -26,13 +26,13 @@ def initialize_donor_database():
                 donation_id TEXT PRIMARY KEY,
                 donor_name TEXT,
                 donor_email TEXT,
-                institution_id TEXT, # Changed from institution to institution_id to match process_successful_donation
-                num_trees INTEGER,   # Added from process_successful_donation
+                institution_id TEXT, 
+                num_trees INTEGER,   
                 amount REAL,
                 currency TEXT,
                 donation_date TEXT,
-                payment_status TEXT, # Added from process_successful_donation
-                message TEXT,        # Added from process_successful_donation
+                payment_status TEXT, 
+                message TEXT,        
                 transaction_id TEXT UNIQUE
             )
         ''')
@@ -40,10 +40,9 @@ def initialize_donor_database():
             CREATE TABLE IF NOT EXISTS donated_trees (
                 donated_tree_id TEXT PRIMARY KEY,
                 donation_id TEXT,
-                tree_id TEXT, -- Link to a specific tree (optional, if tracking individual donated trees)
+                tree_id TEXT,
                 tree_count INTEGER,
                 FOREIGN KEY (donation_id) REFERENCES donations(donation_id)
-                -- FOREIGN KEY (tree_id) REFERENCES trees(tree_id) -- Uncomment if linking to specific trees
             )
         ''')
         conn.commit()
@@ -156,7 +155,6 @@ def donation_section():
                 "payment_status": "pending"
             }
             
-            # Show payment section
             st.session_state.show_payment = True
             st.rerun()
     
@@ -176,16 +174,10 @@ def donation_section():
         </div>
         """, unsafe_allow_html=True)
         
-        # In a real app, this would integrate with PayPal or another payment processor
-        # For this example, we'll simulate payment with a button
-        
-        st.markdown("<h4 style='color: #333;'>Payment Method</h4>", unsafe_allow_html=True)
-        
         payment_col1, payment_col2 = st.columns(2)
         
         with payment_col1:
             if st.button("Pay with PayPal", use_container_width=True):
-                # Simulate successful payment
                 process_successful_donation(donation)
                 st.success("Payment successful! Thank you for your donation.")
                 st.session_state.show_payment = False
@@ -194,7 +186,6 @@ def donation_section():
         
         with payment_col2:
             if st.button("Pay with Credit Card", use_container_width=True):
-                # Simulate successful payment
                 process_successful_donation(donation)
                 st.success("Payment successful! Thank you for your donation.")
                 st.session_state.show_payment = False
@@ -238,7 +229,6 @@ def impact_tracking_section():
     """
     st.markdown("<h3 style='color: #1D7749; margin-top:1rem; margin-bottom: 0.5rem;'>Track Your Impact</h3>", unsafe_allow_html=True)
     
-    # Tracking form
     tracking_col1, tracking_col2 = st.columns(2)
     
     with tracking_col1:
@@ -265,7 +255,7 @@ def about_program_section():
     
     st.markdown("""
     <div style="background-color: #f0f7f0; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem;">
-        <h4 style="margin-top:0; color: #1D7749;">How It Works</h4>
+        <h4 style="margin-top:0; color: #1D7749;'>How It Works</h4>
         <p>1. <strong>You Donate:</strong> Choose an institution and the number of trees you want to fund.</p>
         <p>2. <strong>Trees are Planted:</strong> Our partner institutions and individuals plant the trees using your donation.</p>
         <p>3. <strong>Growth is Monitored:</strong> Trees are regularly monitored for growth and health.</p>
@@ -329,7 +319,7 @@ def process_successful_donation(donation):
             donation["donation_id"],
             donation["donor_email"],
             donation["donor_name"],
-            donation["institution"], # This maps to institution_id in the table
+            donation["institution"],
             donation["num_trees"],
             donation["amount"],
             donation["currency"],
@@ -337,9 +327,6 @@ def process_successful_donation(donation):
             "approved",
             donation["message"]
         ))
-        
-        # In a real app, we would allocate specific trees to this donation
-        # For now, we'll just update the donation record
         
         conn.commit()
     except Exception as e:
@@ -376,7 +363,6 @@ def show_donations_by_email(email):
                 if donation['message']:
                     st.markdown(f"**Message:** {donation['message']}")
                 
-                # In a real app, we would show the specific trees funded by this donation
                 st.info("Tree details will be available once trees are planted.")
     except Exception as e:
         st.error(f"Error retrieving donations: {str(e)}")
@@ -417,7 +403,6 @@ def show_donation_by_id(donation_id):
         if donation['message']:
             st.markdown(f"**Message:** {donation['message']}")
         
-        # In a real app, we would show the specific trees funded by this donation
         st.info("Tree details will be available once trees are planted.")
     except Exception as e:
         st.error(f"Error retrieving donation: {str(e)}")
