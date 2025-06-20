@@ -61,6 +61,13 @@ def load_custom_css():
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }}
         
+        /* User Welcome */
+        .user-welcome {{
+            font-size: 1.8rem;
+            color: #1D7749;
+            margin-bottom: 1.5rem;
+        }}
+        
         /* Metric Cards */
         .metric-card {{
             background: white;
@@ -103,6 +110,11 @@ def load_custom_css():
             border-radius: 8px;
             padding: 0.5rem 1rem;
             font-weight: 500;
+        }}
+        
+        /* Tree Table */
+        .tree-table {{
+            margin-top: 2rem;
         }}
     </style>
     """, unsafe_allow_html=True)
@@ -241,6 +253,118 @@ def show_landing_page():
             st.session_state.page = "User Dashboard"
             st.rerun()
 
+# --- User Dashboard ---
+def unified_user_dashboard_content():
+    """Complete user dashboard with personalized welcome"""
+    if not st.session_state.get('authenticated'):
+        st.warning("Please log in to access your dashboard")
+        st.session_state.page = "Login"
+        st.rerun()
+        return
+
+    user = st.session_state.user
+    user_name = user.get('fullName', user.get('displayName', user.get('email', 'User')))
+    
+    # Personalized welcome
+    st.markdown(f"""
+    <div class="user-welcome">
+        Welcome back, <strong>{user_name.split(' ')[0]}</strong>! 🌟
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # User stats header
+    cols = st.columns(3)
+    with cols[0]:
+        st.metric("Account Type", user.get('role', 'individual').capitalize())
+    with cols[1]:
+        st.metric("Member Since", user.get('join_date', 'N/A'))
+    with cols[2]:
+        st.metric("Tree Tracking ID", user.get('tree_tracking_number', 'Not assigned'))
+    
+    st.markdown("---")
+    
+    # Get user-specific tree data
+    conn = sqlite3.connect(SQLITE_DB)
+    try:
+        # Check which planter identifier column exists
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(trees)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        user_trees = pd.DataFrame()
+        if 'planter_tracking_id' in columns:
+            user_trees = pd.read_sql(
+                f"SELECT * FROM trees WHERE planter_tracking_id = '{user.get('tree_tracking_number', '')}'", 
+                conn
+            )
+        elif 'planter_name' in columns:
+            user_trees = pd.read_sql(
+                f"SELECT * FROM trees WHERE planter_name = '{user_name}'", 
+                conn
+            )
+        
+        if not user_trees.empty:
+            # Trees summary metrics
+            st.subheader("🌳 Your Tree Planting Impact")
+            stat_cols = st.columns(4)
+            with stat_cols[0]:
+                st.metric("Total Planted", len(user_trees))
+            with stat_cols[1]:
+                alive = user_trees[user_trees['status'] == 'Alive'].shape[0]
+                st.metric("Trees Thriving", alive)
+            with stat_cols[2]:
+                st.metric("Survival Rate", f"{round(alive/len(user_trees)*100, 1)}%")
+            with stat_cols[3]:
+                total_co2 = user_trees['co2_kg'].sum()
+                st.metric("CO₂ Sequestered", f"{round(total_co2, 2)} kg")
+            
+            # Tree data table
+            st.subheader("Your Trees")
+            st.dataframe(
+                user_trees[['tree_id', 'local_name', 'scientific_name', 
+                           'date_planted', 'status', 'co2_kg']],
+                use_container_width=True
+            )
+            
+            # Monitoring history
+            st.subheader("📊 Monitoring History")
+            monitoring_data = pd.read_sql(
+                f"SELECT * FROM monitoring_history WHERE tree_id IN ({','.join(['?']*len(user_trees))})",
+                conn,
+                params=user_trees['tree_id'].tolist()
+            )
+            if not monitoring_data.empty:
+                st.dataframe(monitoring_data, use_container_width=True)
+            else:
+                st.info("No monitoring records found for your trees")
+        else:
+            st.info("You haven't planted any trees yet")
+            if st.button("Plant Your First Tree 🌱"):
+                st.session_state.page = "Plant a Tree"
+                st.rerun()
+                
+    except Exception as e:
+        st.error(f"Error loading your data: {str(e)}")
+    finally:
+        conn.close()
+    
+    # Quick actions
+    st.markdown("---")
+    st.subheader("Quick Actions")
+    action_cols = st.columns(3)
+    with action_cols[0]:
+        if st.button("🌱 Plant New Tree"):
+            st.session_state.page = "Plant a Tree"
+            st.rerun()
+    with action_cols[1]:
+        if st.button("🔍 Monitor Trees"):
+            st.session_state.page = "Monitor Trees"
+            st.rerun()
+    with action_cols[2]:
+        if st.button("📜 View Certificates"):
+            st.session_state.page = "Certificates"
+            st.rerun()
+
 # --- Main App Logic ---
 def main():
     # Initialize session state
@@ -255,12 +379,13 @@ def main():
     
     # Sidebar Navigation
     with st.sidebar:
-        st.image("https://via.placeholder.com/150x50?text=CarbonTally", use_column_width=True)
+        st.image("https://via.placeholder.com/150x50?text=CarbonTally", use_container_width=True)
         st.title("Navigation")
         
         if st.session_state.get('authenticated'):
             user = st.session_state.get('user', {})
-            st.write(f"Welcome, {user.get('email', 'User')}!")
+            user_name = user.get('fullName', user.get('displayName', user.get('email', 'User')))
+            st.write(f"Hi, {user_name.split(' ')[0]}! 👋")
             
             if st.button("Logout"):
                 firebase_logout()
@@ -308,9 +433,6 @@ def plant_a_tree_section():
 
 def monitoring_section():
     st.warning("Monitoring section coming soon!")
-
-def unified_user_dashboard_content():
-    st.warning("User dashboard content coming soon!")
 
 if __name__ == "__main__":
     main()
