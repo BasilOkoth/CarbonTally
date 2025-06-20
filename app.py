@@ -20,6 +20,14 @@ try:
     FIREBASE_AVAILABLE = True
 except ImportError as e:
     st.error(f"Firebase Auth Integration Error: {str(e)}")
+    # Create dummy functions for missing imports
+    def firebase_login_ui(): st.warning("Login UI not available")
+    def firebase_signup_ui(): st.warning("Signup UI not available")
+    def firebase_password_recovery_ui(): st.warning("Password recovery not available")
+    def firebase_logout(): st.session_state.authenticated = False
+    def check_firebase_user_role(user, role): return False
+    def initialize_firebase(): return None
+    def get_current_firebase_user(): return None
     FIREBASE_AVAILABLE = False
 
 # Initialize directories
@@ -102,16 +110,34 @@ def load_custom_css():
 # --- Database Helpers ---
 def get_metrics_from_db():
     """Fetch all metrics from database with corrected column names"""
-    conn = sqlite3.connect(SQLITE_DB)
+    conn = None
     try:
+        conn = sqlite3.connect(SQLITE_DB)
+        cursor = conn.cursor()
+        
+        # Get all column names to check what's available
+        cursor.execute("PRAGMA table_info(trees)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
         # Tree metrics
         trees_planted = pd.read_sql("SELECT COUNT(*) FROM trees", conn).iloc[0,0]
         trees_alive = pd.read_sql("SELECT COUNT(*) FROM trees WHERE status='Alive'", conn).iloc[0,0]
         total_co2 = pd.read_sql("SELECT SUM(co2_kg) FROM trees", conn).iloc[0,0] or 0
         
-        # User metrics - using planter_name instead of student_name
+        # User metrics - checking for available planter identifier columns
         institutions = pd.read_sql("SELECT COUNT(*) FROM institutions", conn).iloc[0,0]
-        individuals = pd.read_sql("SELECT COUNT(DISTINCT planter_name) FROM trees", conn).iloc[0,0]
+        
+        # Check which planter identifier column exists
+        planter_column = None
+        for col in ['planter_name', 'planter_id', 'adopter_name', 'user_id']:
+            if col in columns:
+                planter_column = col
+                break
+                
+        if planter_column:
+            individuals = pd.read_sql(f"SELECT COUNT(DISTINCT {planter_column}) FROM trees", conn).iloc[0,0]
+        else:
+            individuals = 0
         
         return {
             "trees_planted": trees_planted,
@@ -133,7 +159,8 @@ def get_metrics_from_db():
             "survival_rate": 0
         }
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # --- Landing Page ---
 def show_landing_page():
