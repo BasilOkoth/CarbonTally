@@ -10,12 +10,12 @@ BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
 DATA_DIR = BASE_DIR / "data"
 SQLITE_DB = DATA_DIR / "trees.db"
 
-# Custom module imports
+# Custom module imports with error handling
 try:
     from firebase_auth_integration import (
         firebase_login_ui, firebase_signup_ui, firebase_password_recovery_ui,
         firebase_logout, check_firebase_user_role, initialize_firebase,
-        admin_approval_dashboard, get_current_firebase_user
+        get_current_firebase_user
     )
     FIREBASE_AVAILABLE = True
 except ImportError as e:
@@ -96,19 +96,12 @@ def load_custom_css():
             padding: 0.5rem 1rem;
             font-weight: 500;
         }}
-        
-        /* Responsive Grid */
-        @media (max-width: 768px) {{
-            .metric-grid {{
-                grid-template-columns: repeat(2, 1fr) !important;
-            }}
-        }}
     </style>
     """, unsafe_allow_html=True)
 
 # --- Database Helpers ---
 def get_metrics_from_db():
-    """Fetch all metrics from database"""
+    """Fetch all metrics from database with corrected column names"""
     conn = sqlite3.connect(SQLITE_DB)
     try:
         # Tree metrics
@@ -116,9 +109,9 @@ def get_metrics_from_db():
         trees_alive = pd.read_sql("SELECT COUNT(*) FROM trees WHERE status='Alive'", conn).iloc[0,0]
         total_co2 = pd.read_sql("SELECT SUM(co2_kg) FROM trees", conn).iloc[0,0] or 0
         
-        # User metrics
+        # User metrics - using planter_name instead of student_name
         institutions = pd.read_sql("SELECT COUNT(*) FROM institutions", conn).iloc[0,0]
-        individuals = pd.read_sql("SELECT COUNT(DISTINCT student_name) FROM trees", conn).iloc[0,0]
+        individuals = pd.read_sql("SELECT COUNT(DISTINCT planter_name) FROM trees", conn).iloc[0,0]
         
         return {
             "trees_planted": trees_planted,
@@ -130,7 +123,15 @@ def get_metrics_from_db():
         }
     except Exception as e:
         st.error(f"Database error: {str(e)}")
-        return None
+        # Return default values if query fails
+        return {
+            "trees_planted": 0,
+            "trees_alive": 0,
+            "total_co2": 0,
+            "institutions": 0,
+            "individuals": 0,
+            "survival_rate": 0
+        }
     finally:
         conn.close()
 
@@ -151,46 +152,23 @@ def show_landing_page():
     
     # Metrics Section
     metrics = get_metrics_from_db()
-    if metrics:
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    metric_data = [
+        {"value": metrics['trees_planted'], "label": "Trees Planted"},
+        {"value": metrics['trees_alive'], "label": "Trees Thriving"},
+        {"value": f"{metrics['survival_rate']}%", "label": "Survival Rate"},
+        {"value": f"{metrics['total_co2']} kg", "label": "CO₂ Sequestered"},
+        {"value": metrics['institutions'] + metrics['individuals'], "label": "Active Contributors"}
+    ]
+    
+    for i, col in enumerate([col1, col2, col3, col4, col5]):
+        with col:
             st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-value">{metrics['trees_planted']}</div>
-                <div class="metric-label">Trees Planted</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col2:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metrics['trees_alive']}</div>
-                <div class="metric-label">Trees Thriving</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col3:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metrics['survival_rate']}%</div>
-                <div class="metric-label">Survival Rate</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col4:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metrics['total_co2']} kg</div>
-                <div class="metric-label">CO₂ Sequestered</div>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        with col5:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metrics['institutions'] + metrics['individuals']}</div>
-                <div class="metric-label">Active Contributors</div>
+                <div class="metric-value">{metric_data[i]['value']}</div>
+                <div class="metric-label">{metric_data[i]['label']}</div>
             </div>
             """, unsafe_allow_html=True)
     
@@ -209,11 +187,11 @@ def show_landing_page():
         """, unsafe_allow_html=True)
         
     with col2:
-        st.markdown("""
+        st.markdown(f"""
         <div class="feature-card">
             <h3>👥 Community Engagement</h3>
             <p>Join {metrics['institutions']} institutions and {metrics['individuals']} 
-            individuals making a difference in their communities.</p>
+            planters making a difference in their communities.</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -224,7 +202,7 @@ def show_landing_page():
     if not st.session_state.get('authenticated'):
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Join as Individual", use_container_width=True):
+            if st.button("Join as Planter", use_container_width=True):
                 st.session_state.page = "Sign Up"
                 st.rerun()
         with col2:
@@ -266,14 +244,11 @@ def main():
             menu_options.extend(["Login", "Sign Up"])
         else:
             menu_options.extend(["User Dashboard", "Plant a Tree", "Monitor Trees"])
-            if check_firebase_user_role(st.session_state.user, 'institution'):
-                menu_options.append("Admin Dashboard")
         
         st.session_state.page = st.selectbox(
             "Go to", 
             menu_options,
-            index=menu_options.index(st.session_state.page) 
-            if st.session_state.page in menu_options else 0
+            index=menu_options.index(st.session_state.page) if st.session_state.page in menu_options else 0
         )
     
     # Page Routing
@@ -292,17 +267,23 @@ def main():
             plant_a_tree_section()
         elif st.session_state.page == "Monitor Trees":
             monitoring_section()
-        elif st.session_state.page == "Admin Dashboard":
-            if check_firebase_user_role(st.session_state.user, 'institution'):
-                admin_approval_dashboard()
-            else:
-                st.error("Admin access requires institution role")
-                st.session_state.page = "Home"
-                st.rerun()
     else:
         st.warning("Please log in to access this page")
         st.session_state.page = "Login"
         st.rerun()
+
+# Placeholder functions for unimplemented sections
+def donor_dashboard():
+    st.warning("Donor dashboard coming soon!")
+
+def plant_a_tree_section():
+    st.warning("Tree planting section coming soon!")
+
+def monitoring_section():
+    st.warning("Monitoring section coming soon!")
+
+def unified_user_dashboard_content():
+    st.warning("User dashboard content coming soon!")
 
 if __name__ == "__main__":
     main()
