@@ -30,6 +30,49 @@ except ImportError as e:
     def get_current_firebase_user(): return None
     FIREBASE_AVAILABLE = False
 
+try:
+    from kobo_integration import (
+        plant_a_tree_section,
+        check_for_new_submissions,
+        initialize_database, # Assuming this is the primary initialize for Kobo integration
+        get_leaderboard_data as get_kobo_leaderboard, # Now defined in kobo_integration.py
+        get_user_badges as get_kobo_badges # Now defined in kobo_integration.py
+    )
+except ImportError as e:
+    st.error(f"Kobo Integration module error: {str(e)}. Tree planting section coming soon!")
+    def plant_a_tree_section(): st.warning("Tree planting section coming soon!")
+    def check_for_new_submissions(user_id=None, hours=24): return []
+    def initialize_database(): pass
+    def get_kobo_leaderboard(): return pd.DataFrame()
+    def get_kobo_badges(user_email=None): return {}
+
+try:
+    from kobo_monitoring import (
+        monitoring_section,
+        get_tree_details, # Ensure this is also in kobo_monitoring.py if used directly
+        check_for_new_monitoring_submissions,
+        admin_tree_lookup as admin_monitoring_lookup, # Now defined in kobo_monitoring.py
+        initialize_database as initialize_monitoring_db # Assuming this is the primary initialize for Kobo monitoring
+    )
+except ImportError as e:
+    st.error(f"Kobo Monitoring module error: {str(e)}. Monitoring section coming soon!")
+    def monitoring_section(): st.warning("Monitoring section coming soon!")
+    def get_tree_details(tree_id): return None
+    def check_for_new_monitoring_submissions(hours=24): return []
+    def admin_monitoring_lookup(query): return pd.DataFrame()
+    def initialize_monitoring_db(): pass
+
+try:
+    from donor_dashboard import guest_donor_dashboard_ui
+except ImportError as e:
+    st.error(f"Donor Dashboard module error: {str(e)}. Donor dashboard coming soon!")
+    def guest_donor_dashboard_ui(): st.warning("Donor dashboard coming soon!")
+
+try:
+    from branding_footer import add_branding_footer
+except ImportError:
+    def add_branding_footer(): st.markdown("<p style='text-align:center;font-size:0.8em;color:grey;'>🌱 CarbonTally – Developed by Basil Okoth</p>", unsafe_allow_html=True)
+
 # Initialize directories
 DATA_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -38,371 +81,271 @@ st.set_page_config(
     page_title="CarbonTally Tree Tracking",
     page_icon="🌳",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded" # Keep sidebar expanded by default
 )
 
-# --- Custom CSS Styling ---
-def load_custom_css():
-    st.markdown(f"""
-    <style>
-        /* Main Layout */
-        .stApp {{
-            background-color: #f8f9fa;
-        }}
-        
-        /* Header Styles */
-        .landing-header {{
-            background: linear-gradient(135deg, #1D7749 0%, #28a745 100%);
-            color: white;
-            padding: 3rem;
-            text-align: center;
-            border-radius: 15px;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }}
-        
-        /* User Welcome */
-        .user-welcome {{
-            font-size: 1.8rem;
-            color: #1D7749;
-            margin-bottom: 1.5rem;
-        }}
-        
-        /* Metric Cards */
-        .metric-card {{
-            background: white;
-            border-radius: 10px;
-            padding: 1.5rem;
-            margin: 1rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            text-align: center;
-            transition: transform 0.3s ease;
-        }}
-        .metric-card:hover {{
-            transform: translateY(-5px);
-            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-        }}
-        .metric-value {{
-            font-size: 2.5rem;
-            font-weight: bold;
-            color: #28a745;
-            margin: 0.5rem 0;
-        }}
-        .metric-label {{
-            font-size: 1rem;
-            color: #555;
-        }}
-        
-        /* Feature Cards */
-        .feature-card {{
-            background: white;
-            border-left: 4px solid #28a745;
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-        }}
-        
-        /* Buttons */
-        .stButton>button {{
-            background-color: #28a745;
-            color: white;
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
-        }}
-        
-        /* Tree Table */
-        .tree-table {{
-            margin-top: 2rem;
-        }}
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- Database Helpers ---
-def get_metrics_from_db():
-    """Fetch all metrics from database with corrected column names"""
-    conn = None
+# --- Firebase Initialization ---
+if FIREBASE_AVAILABLE and 'firebase_initialized' not in st.session_state:
     try:
-        conn = sqlite3.connect(SQLITE_DB)
-        cursor = conn.cursor()
-        
-        # Get all column names to check what's available
-        cursor.execute("PRAGMA table_info(trees)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        # Tree metrics
-        trees_planted = pd.read_sql("SELECT COUNT(*) FROM trees", conn).iloc[0,0]
-        trees_alive = pd.read_sql("SELECT COUNT(*) FROM trees WHERE status='Alive'", conn).iloc[0,0]
-        total_co2 = pd.read_sql("SELECT SUM(co2_kg) FROM trees", conn).iloc[0,0] or 0
-        
-        # User metrics - checking for available planter identifier columns
-        institutions = pd.read_sql("SELECT COUNT(*) FROM institutions", conn).iloc[0,0]
-        
-        # Check which planter identifier column exists
-        planter_column = None
-        for col in ['planter_name', 'planter_id', 'adopter_name', 'user_id']:
-            if col in columns:
-                planter_column = col
-                break
-                
-        if planter_column:
-            individuals = pd.read_sql(f"SELECT COUNT(DISTINCT {planter_column}) FROM trees", conn).iloc[0,0]
-        else:
-            individuals = 0
-        
-        return {
-            "trees_planted": trees_planted,
-            "trees_alive": trees_alive,
-            "total_co2": round(total_co2, 2),
-            "institutions": institutions,
-            "individuals": individuals,
-            "survival_rate": round((trees_alive / trees_planted * 100) if trees_planted > 0 else 0, 1)
-        }
+        initialize_firebase()
+        st.session_state.firebase_initialized = True
     except Exception as e:
-        st.error(f"Database error: {str(e)}")
-        # Return default values if query fails
-        return {
-            "trees_planted": 0,
-            "trees_alive": 0,
-            "total_co2": 0,
-            "institutions": 0,
-            "individuals": 0,
-            "survival_rate": 0
-        }
-    finally:
-        if conn:
+        st.error(f"Firebase initialization failed: {e}")
+        st.session_state.firebase_initialized = False
+
+# --- Session State Management ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user' not in st.session_state:
+    st.session_state.user = None
+if 'page' not in st.session_state:
+    st.session_state.page = "Home"
+
+# Function to get active user and update session state
+def get_active_user_and_update_state():
+    if st.session_state.authenticated:
+        try:
+            current_user = get_current_firebase_user()
+            if current_user:
+                st.session_state.user = current_user
+                return True
+            else:
+                st.session_state.authenticated = False
+                st.session_state.user = None
+                return False
+        except Exception as e:
+            st.error(f"Error fetching current Firebase user: {e}")
+            st.session_state.authenticated = False
+            st.session_state.user = None
+            return False
+    return False
+
+# --- UI Components ---
+def show_landing_page():
+    st.title("Welcome to CarbonTally! 🌳")
+    st.markdown("""
+        **CarbonTally** is a platform dedicated to tracking and monitoring tree planting initiatives.
+        We provide tools for individuals, schools, and institutions to record tree data,
+        track their growth, estimate CO2 sequestration, and engage in a community committed to a greener future.
+    """)
+
+    st.subheader("Our Mission")
+    st.markdown("""
+        To empower communities with transparent and verifiable data on tree planting efforts,
+        fostering environmental stewardship and combating climate change one tree at a time.
+    """)
+
+    st.subheader("Key Features")
+    st.markdown("""
+    * **🌲 Tree Planting:** Record new tree data easily via KoBo forms.
+    * **📈 Tree Monitoring:** Track the growth and health of planted trees over time.
+    * **📊 CO₂ Sequestration:** Estimate the carbon impact of your trees.
+    * **🏅 Leaderboards & Badges:** Gamified engagement for planters.
+    * **🌍 Donor Dashboard:** Transparent impact tracking for donors.
+    * **🔒 Secure Authentication:** Manage user accounts with Firebase.
+    """)
+
+    st.subheader("Get Started")
+    st.markdown("""
+    * **New Users:** [Sign Up](#sign-up) to start planting and monitoring trees!
+    * **Existing Users:** [Login](#login) to access your dashboard.
+    * **Donors:** Explore the [Donor Dashboard](#donor-dashboard) to see our impact and support initiatives.
+    """)
+
+    st.markdown("---")
+    st.subheader("Participating Entities")
+    # You will populate this with data from your database (e.g., institutions)
+    st.info("List of participating institutions/schools will appear here.")
+    # Example:
+    # conn = sqlite3.connect(SQLITE_DB)
+    # try:
+    #     df_institutions = pd.read_sql_query("SELECT name, total_trees_planted FROM institutions ORDER BY total_trees_planted DESC", conn)
+    #     if not df_institutions.empty:
+    #         st.dataframe(df_institutions)
+    #     else:
+    #         st.info("No institutions registered yet.")
+    # finally:
+    #     conn.close()
+
+def unified_user_dashboard_content():
+    """Displays dashboard content based on user role."""
+    st.title("My Dashboard")
+    user = st.session_state.get('user')
+
+    if user:
+        st.subheader(f"Welcome, {user.get('username', user.get('email', 'User'))}!")
+        st.write(f"**Email:** {user.get('email')}")
+        st.write(f"**Role:** {user.get('role', 'N/A').capitalize()}")
+
+        # Display basic user stats from session state or profile (from firebase_auth_integration.py)
+        st.write(f"**Total Trees Planted:** {user.get('total_trees_planted', 0)}")
+        st.write(f"**Total CO₂ Sequestered:** {user.get('total_co2_sequestered', 0.0):.2f} kg")
+
+        if check_firebase_user_role(user, 'individual'):
+            st.info("As an individual, you can plant trees and monitor their growth.")
+            # Add features for individual users (e.g., list their trees)
+        elif check_firebase_user_role(user, 'institution'):
+            st.info("As an institution, you can view your overall planting impact and manage users.")
+            # Add features for institution users (e.g., aggregate data, link to admin approval)
+
+        # Placeholder for tree data associated with the user's tree_tracking_id
+        st.subheader("Your Planted Trees")
+        current_user_tree_tracking_id = user.get('tree_tracking_number') # Corrected from tree_tracking_id to tree_tracking_number
+
+        if current_user_tree_tracking_id:
+            conn = sqlite3.connect(SQLITE_DB)
+            # IMPORTANT: Query now based on planter_tracking_id which stores the KoBo tree_tracking_number
+            df_user_trees = pd.read_sql_query(f"SELECT * FROM trees WHERE planter_tracking_id = '{current_user_tree_tracking_id}'", conn)
             conn.close()
 
-# --- Landing Page ---
-def show_landing_page():
-    """Display the enhanced landing page with metrics"""
-    load_custom_css()
-    
-    # Header Section
-    st.markdown("""
-    <div class="landing-header">
-        <h1 style="font-size: 3rem; margin-bottom: 1rem;">Welcome to CarbonTally 🌱</h1>
-        <p style="font-size: 1.2rem; opacity: 0.9;">
-            Track your tree planting impact and contribute to a sustainable future
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Metrics Section
-    metrics = get_metrics_from_db()
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    metric_data = [
-        {"value": metrics['trees_planted'], "label": "Trees Planted"},
-        {"value": metrics['trees_alive'], "label": "Trees Thriving"},
-        {"value": f"{metrics['survival_rate']}%", "label": "Survival Rate"},
-        {"value": f"{metrics['total_co2']} kg", "label": "CO₂ Sequestered"},
-        {"value": metrics['institutions'] + metrics['individuals'], "label": "Active Contributors"}
-    ]
-    
-    for i, col in enumerate([col1, col2, col3, col4, col5]):
-        with col:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">{metric_data[i]['value']}</div>
-                <div class="metric-label">{metric_data[i]['label']}</div>
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Features Section
-    st.markdown("---")
-    st.header("Our Impact")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        <div class="feature-card">
-            <h3>🌍 Environmental Impact</h3>
-            <p>Every tree planted contributes to carbon sequestration, 
-            biodiversity preservation, and ecosystem restoration.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    with col2:
-        st.markdown(f"""
-        <div class="feature-card">
-            <h3>👥 Community Engagement</h3>
-            <p>Join {metrics['institutions']} institutions and {metrics['individuals']} 
-            planters making a difference in their communities.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Call to Action
-    st.markdown("---")
-    st.header("Ready to Make a Difference?")
-    
-    if not st.session_state.get('authenticated'):
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Join as Planter", use_container_width=True):
-                st.session_state.page = "Sign Up"
-                st.rerun()
-        with col2:
-            if st.button("Register Your Institution", use_container_width=True):
-                st.session_state.page = "Sign Up"
-                st.rerun()
-    else:
-        if st.button("Go to Your Dashboard →", use_container_width=True):
-            st.session_state.page = "User Dashboard"
-            st.rerun()
+            if not df_user_trees.empty:
+                st.dataframe(df_user_trees)
+            else:
+                st.info("No trees found associated with your account yet.")
+                if st.button("Plant a Tree Now"):
+                    st.session_state.page = "Plant a Tree"
+                    st.rerun()
+        else:
+            st.info("Your account is not yet linked to a Tree Tracking ID. Please contact support if this is incorrect.")
 
-# --- User Dashboard ---
-def unified_user_dashboard_content():
-    """Complete user dashboard with personalized welcome"""
-    if not st.session_state.get('authenticated'):
-        st.warning("Please log in to access your dashboard")
+    else:
+        st.warning("User session not found. Please log in.")
         st.session_state.page = "Login"
         st.rerun()
-        return
 
-    user = st.session_state.user
-    user_name = user.get('fullName', user.get('displayName', user.get('email', 'User')))
-    
-    # Personalized welcome
-    st.markdown(f"""
-    <div class="user-welcome">
-        Welcome back, <strong>{user_name.split(' ')[0]}</strong>! 🌟
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # User stats header
-    cols = st.columns(3)
-    with cols[0]:
-        st.metric("Account Type", user.get('role', 'individual').capitalize())
-    with cols[1]:
-        st.metric("Member Since", user.get('join_date', 'N/A'))
-    with cols[2]:
-        st.metric("Tree Tracking ID", user.get('tree_tracking_number', 'Not assigned'))
-    
-    st.markdown("---")
-    
-    # Get user-specific tree data
-    conn = sqlite3.connect(SQLITE_DB)
-    try:
-        # Check which planter identifier column exists
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(trees)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        user_trees = pd.DataFrame()
-        if 'planter_tracking_id' in columns:
-            user_trees = pd.read_sql(
-                f"SELECT * FROM trees WHERE planter_tracking_id = '{user.get('tree_tracking_number', '')}'", 
-                conn
-            )
-        elif 'planter_name' in columns:
-            user_trees = pd.read_sql(
-                f"SELECT * FROM trees WHERE planter_name = '{user_name}'", 
-                conn
-            )
-        
-        if not user_trees.empty:
-            # Trees summary metrics
-            st.subheader("🌳 Your Tree Planting Impact")
-            stat_cols = st.columns(4)
-            with stat_cols[0]:
-                st.metric("Total Planted", len(user_trees))
-            with stat_cols[1]:
-                alive = user_trees[user_trees['status'] == 'Alive'].shape[0]
-                st.metric("Trees Thriving", alive)
-            with stat_cols[2]:
-                st.metric("Survival Rate", f"{round(alive/len(user_trees)*100, 1)}%")
-            with stat_cols[3]:
-                total_co2 = user_trees['co2_kg'].sum()
-                st.metric("CO₂ Sequestered", f"{round(total_co2, 2)} kg")
-            
-            # Tree data table
-            st.subheader("Your Trees")
-            st.dataframe(
-                user_trees[['tree_id', 'local_name', 'scientific_name', 
-                           'date_planted', 'status', 'co2_kg']],
-                use_container_width=True
-            )
-            
-            # Monitoring history
-            st.subheader("📊 Monitoring History")
-            monitoring_data = pd.read_sql(
-                f"SELECT * FROM monitoring_history WHERE tree_id IN ({','.join(['?']*len(user_trees))})",
-                conn,
-                params=user_trees['tree_id'].tolist()
-            )
-            if not monitoring_data.empty:
-                st.dataframe(monitoring_data, use_container_width=True)
-            else:
-                st.info("No monitoring records found for your trees")
-        else:
-            st.info("You haven't planted any trees yet")
-            if st.button("Plant Your First Tree 🌱"):
-                st.session_state.page = "Plant a Tree"
-                st.rerun()
-                
-    except Exception as e:
-        st.error(f"Error loading your data: {str(e)}")
-    finally:
-        conn.close()
-    
-    # Quick actions
-    st.markdown("---")
-    st.subheader("Quick Actions")
-    action_cols = st.columns(3)
-    with action_cols[0]:
-        if st.button("🌱 Plant New Tree"):
-            st.session_state.page = "Plant a Tree"
-            st.rerun()
-    with action_cols[1]:
-        if st.button("🔍 Monitor Trees"):
-            st.session_state.page = "Monitor Trees"
-            st.rerun()
-    with action_cols[2]:
-        if st.button("📜 View Certificates"):
-            st.session_state.page = "Certificates"
-            st.rerun()
+def admin_dashboard_content():
+    st.title("Admin Dashboard")
+    user = st.session_state.get('user')
 
-# --- Main App Logic ---
+    if user and check_firebase_user_role(user, 'admin'):
+        st.info("Welcome to the Admin Dashboard. Here you can manage users, view aggregate data, and process submissions.")
+
+        tab1, tab2, tab3 = st.tabs(["User Management", "Data Overview", "Process Submissions"])
+
+        with tab1:
+            st.subheader("User Management & Approval")
+            # This would link to or embed the admin_approval_dashboard from firebase_auth_integration
+            # Assuming admin_approval_dashboard is imported from firebase_auth_integration
+            # You might need to import admin_approval_dashboard from firebase_auth_integration
+            # and call it here. For now, it's a placeholder.
+            st.warning("User management features (e.g., approval queue) coming soon!")
+            # Example if admin_approval_dashboard exists in firebase_auth_integration:
+            # if 'admin_approval_dashboard' in globals():
+            #     admin_approval_dashboard()
+            # else:
+            #     st.info("Admin approval dashboard module not loaded.")
+
+        with tab2:
+            st.subheader("Overall Data Overview")
+            conn = sqlite3.connect(SQLITE_DB)
+            try:
+                df_trees = pd.read_sql_query("SELECT * FROM trees", conn)
+                df_users = pd.read_sql_query("SELECT * FROM user_profiles", conn)
+
+                st.write(f"Total Registered Users: {len(df_users)}")
+                st.write(f"Total Trees Planted: {len(df_trees)}")
+                st.write(f"Total CO₂ Sequestered (all trees): {df_trees['co2_kg'].sum() if not df_trees.empty else 0:.2f} kg")
+
+                if not df_trees.empty:
+                    st.subheader("Tree Status Distribution")
+                    fig_status = px.pie(df_trees, names='status', title='Distribution of Tree Status')
+                    st.plotly_chart(fig_status, use_container_width=True)
+
+                    st.subheader("Trees Planted Over Time")
+                    df_trees['date_planted'] = pd.to_datetime(df_trees['date_planted'])
+                    trees_per_month = df_trees.groupby(df_trees['date_planted'].dt.to_period('M')).size().reset_index(name='count')
+                    trees_per_month['date_planted'] = trees_per_month['date_planted'].astype(str) # For plotting
+                    fig_time = px.line(trees_per_month, x='date_planted', y='count', title='Trees Planted Per Month')
+                    st.plotly_chart(fig_time, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error loading admin dashboard data: {e}")
+            finally:
+                conn.close()
+
+        with tab3:
+            st.subheader("Process New KoBo Submissions")
+            st.info("Use this section to manually trigger processing of new tree planting or monitoring submissions.")
+
+            planting_hours = st.slider("Check planting submissions (hours ago)", 1, 168, 24, key="planting_slider")
+            if st.button("Process New Planting Submissions", key="process_planting_btn"):
+                with st.spinner("Checking for new planting data..."):
+                    # Pass None for user_id to process all submissions for admin
+                    new_planting_submissions = check_for_new_submissions(user_id=None, hours=planting_hours)
+                    if new_planting_submissions:
+                        st.success(f"Processed {len(new_planting_submissions)} new planting records.")
+                    else:
+                        st.info("No new planting records found.")
+
+            monitoring_hours = st.slider("Check monitoring submissions (hours ago)", 1, 168, 24, key="monitoring_slider")
+            if st.button("Process New Monitoring Submissions", key="process_monitoring_btn"):
+                with st.spinner("Checking for new monitoring data..."):
+                    new_monitoring_submissions = check_for_new_monitoring_submissions(hours=monitoring_hours)
+                    if new_monitoring_submissions:
+                        st.success(f"Processed {len(new_monitoring_submissions)} new monitoring records.")
+                    else:
+                        st.info("No new monitoring records found.")
+
+            st.markdown("---")
+            st.subheader("Maintenance Tools")
+            # You'll need `bulk_update_co2_calculations` and `update_user_statistics` in your utility functions
+            st.warning("Maintenance tools coming soon!")
+            # if st.button("🔄 Update All CO₂ Calculations", type="primary"):
+            #     with st.spinner("Updating CO₂ calculations..."):
+            #         updated_count = bulk_update_co2_calculations()
+            #         st.success(f"Updated CO₂ calculations for {updated_count} trees!")
+
+            # if st.button("📊 Refresh User Statistics"):
+            #     with st.spinner("Refreshing user statistics..."):
+            #         conn = sqlite3.connect(SQLITE_DB)
+            #         try:
+            #             users = pd.read_sql("SELECT DISTINCT COALESCE(planter_email, student_name) as user_email FROM trees WHERE COALESCE(planter_email, student_name) != ''", conn)
+            #             updated_users = 0
+            #             for _, user_row in users.iterrows():
+            #                 if update_user_statistics(user_row["user_email"]):
+            #                     updated_users += 1
+            #             st.success(f"Updated statistics for {updated_users} users!")
+            #         finally:
+            #             conn.close()
+    else:
+        st.error("Access denied. Admin privileges required.")
+
 def main():
-    # Initialize session state
-    if 'page' not in st.session_state:
-        st.session_state.page = "Home"
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    
-    # Initialize Firebase
-    if FIREBASE_AVAILABLE and not st.session_state.get('firebase_initialized'):
-        st.session_state.firebase_initialized = initialize_firebase() is not None
-    
+    """Main application function to orchestrate the Streamlit app."""
+
+    # Check and update user session
+    if 'user' not in st.session_state or not st.session_state.authenticated:
+        get_active_user_and_update_state() # Attempt to get user if authenticated flag is set
+
     # Sidebar Navigation
     with st.sidebar:
-        st.image("https://via.placeholder.com/150x50?text=CarbonTally", use_container_width=True)
-        st.title("Navigation")
-        
-        if st.session_state.get('authenticated'):
-            user = st.session_state.get('user', {})
-            user_name = user.get('fullName', user.get('displayName', user.get('email', 'User')))
-            st.write(f"Hi, {user_name.split(' ')[0]}! 👋")
-            
-            if st.button("Logout"):
-                firebase_logout()
-                st.rerun()
-        
+        st.header("Navigation")
         menu_options = ["Home", "Donor Dashboard"]
+
+        # Add authenticated user options
         if not st.session_state.authenticated:
             menu_options.extend(["Login", "Sign Up"])
         else:
             menu_options.extend(["User Dashboard", "Plant a Tree", "Monitor Trees"])
-        
+
+            # Admin-specific pages (assuming 'admin' role has higher access than 'institution' here)
+            user = st.session_state.get('user')
+            if user and check_firebase_user_role(user, 'admin'):
+                menu_options.append("Admin Dashboard")
+
         st.session_state.page = st.selectbox(
-            "Go to", 
+            "Go to",
             menu_options,
             index=menu_options.index(st.session_state.page) if st.session_state.page in menu_options else 0
         )
-    
+
+        if st.session_state.authenticated:
+            if st.button("Logout", type="secondary"):
+                firebase_logout()
+                st.session_state.page = "Login" # Redirect to login after logout
+                st.success("Logged out successfully!")
+                st.rerun()
+
     # Page Routing
     if st.session_state.page == "Home":
         show_landing_page()
@@ -411,28 +354,24 @@ def main():
     elif st.session_state.page == "Sign Up":
         firebase_signup_ui()
     elif st.session_state.page == "Donor Dashboard":
-        donor_dashboard()
+        guest_donor_dashboard_ui() # This is the function from donor_dashboard.py
     elif st.session_state.authenticated:
         if st.session_state.page == "User Dashboard":
             unified_user_dashboard_content()
         elif st.session_state.page == "Plant a Tree":
-            plant_a_tree_section()
+            plant_a_tree_section() # This is the function from kobo_integration.py
         elif st.session_state.page == "Monitor Trees":
-            monitoring_section()
+            monitoring_section() # This is the function from kobo_monitoring.py
+        elif st.session_state.page == "Admin Dashboard":
+            admin_dashboard_content() # This is the local function in app.py
     else:
         st.warning("Please log in to access this page")
         st.session_state.page = "Login"
         st.rerun()
 
-# Placeholder functions for unimplemented sections
-def donor_dashboard():
-    st.warning("Donor dashboard coming soon!")
+    # Footer
+    add_branding_footer()
 
-def plant_a_tree_section():
-    st.warning("Tree planting section coming soon!")
-
-def monitoring_section():
-    st.warning("Monitoring section coming soon!")
 
 if __name__ == "__main__":
     main()
