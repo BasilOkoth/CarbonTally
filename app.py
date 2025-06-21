@@ -20,9 +20,9 @@ from paypalrestsdk import Payment
 try:
     from branding_footer import add_branding_footer
 except ImportError:
-    def add_branding_footer(): 
-        st.markdown("<p style='text-align:center;font-size:0.8em;color:grey;'>🌱 CarbonTally – Developed by Basil Okoth</p>", 
-                   unsafe_allow_html=True)
+    def add_branding_footer():
+        st.markdown("<p style='text-align:center;font-size:0.8em;color:grey;'>🌱 CarbonTally – Developed by Basil Okoth</p>",
+                    unsafe_allow_html=True)
 
 try:
     from kobo_integration import plant_a_tree_section, check_for_new_submissions
@@ -97,19 +97,19 @@ def set_custom_css():
             text-align: center;
             margin-bottom: 2rem;
         }
-        
+
         .landing-header h1 {
             font-size: 3.5rem;
             margin-bottom: 0.5rem;
             font-weight: 800;
         }
-        
+
         .landing-header p {
             font-size: 1.2rem;
             max-width: 800px;
             margin: 0 auto 1.5rem auto;
         }
-        
+
         .metric-card {
             background: white;
             border-radius: 10px;
@@ -120,25 +120,25 @@ def set_custom_css():
             transition: all 0.3s ease;
             height: 100%;
         }
-        
+
         .metric-card:hover {
             transform: translateY(-5px);
             box-shadow: 0 8px 20px rgba(0,0,0,0.15);
         }
-        
+
         .metric-value {
             font-size: 2.5rem;
             font-weight: 700;
             color: #1D7749;
             margin: 0.5rem 0;
         }
-        
+
         .metric-label {
             font-size: 1rem;
             color: #555;
             margin-bottom: 0.5rem;
         }
-        
+
         .landing-btn {
             display: inline-block;
             background-color: #1D7749 !important;
@@ -152,13 +152,13 @@ def set_custom_css():
             text-align: center;
             width: 100%;
         }
-        
+
         .landing-btn:hover {
             background-color: #15613b !important;
             transform: translateY(-2px) !important;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
         }
-        
+
         .feature-card {
             background: white;
             border-radius: 10px;
@@ -167,12 +167,12 @@ def set_custom_css():
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             border: 1px solid #e0e0e0;
         }
-        
+
         .feature-card h3 {
             color: #1D7749;
             margin-top: 0;
         }
-        
+
         /* App-wide Styles */
         .header-text {
             color: #1D7749;
@@ -180,12 +180,12 @@ def set_custom_css():
             font-size: 2.2rem;
             margin-bottom: 1rem;
         }
-        
+
         @media (max-width: 768px) {
             .landing-header h1 {
                 font-size: 2.5rem;
             }
-            
+
             .metric-value {
                 font-size: 2rem;
             }
@@ -205,21 +205,21 @@ def init_db():
     DATA_DIR.mkdir(exist_ok=True, parents=True)
     conn = sqlite3.connect(SQLITE_DB)
     c = conn.cursor()
-    
+
     c.execute("""CREATE TABLE IF NOT EXISTS trees (
-        tree_id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        tree_id INTEGER PRIMARY KEY AUTOINCREMENT,
         institution TEXT, local_name TEXT, scientific_name TEXT,
         planter_id TEXT, date_planted TEXT, tree_stage TEXT, rcd_cm REAL, dbh_cm REAL,
         height_m REAL, latitude REAL, longitude REAL, co2_kg REAL, status TEXT
     )""")
-    
+
     c.execute("""CREATE TABLE IF NOT EXISTS species (
         scientific_name TEXT PRIMARY KEY, local_name TEXT, wood_density REAL, benefits TEXT
     )""")
-    
+
     c.execute("""CREATE TABLE IF NOT EXISTS institutions (
-        id TEXT PRIMARY KEY, 
-        name TEXT, 
+        id TEXT PRIMARY KEY,
+        name TEXT,
         join_date TEXT
     )""")
 
@@ -250,9 +250,9 @@ def add_institution_to_db(firebase_uid: str, institution_name: str):
 
 def load_tree_data():
     conn = sqlite3.connect(SQLITE_DB)
-    try:        
+    try:
         df = pd.read_sql_query("SELECT * FROM trees", conn)
-    except pd.io.sql.DatabaseError:    
+    except pd.io.sql.DatabaseError:
         df = pd.DataFrame()
     conn.close()
     return df
@@ -267,20 +267,20 @@ def get_landing_metrics():
         "co2_sequestered": 0,
         "map_data": pd.DataFrame(columns=['latitude', 'longitude'])
     }
-    
+
     try:
         init_db()
         conn = sqlite3.connect(SQLITE_DB)
         institutions_count = conn.execute("SELECT COUNT(*) FROM institutions").fetchone()[0]
         trees_df = pd.read_sql_query("SELECT * FROM trees", conn)
-        
+
         if not trees_df.empty:
             total_trees = len(trees_df)
             alive_trees = len(trees_df[trees_df["status"] == "Alive"]) if "status" in trees_df.columns else 0
             survival_rate = round((alive_trees / total_trees) * 100, 1) if total_trees > 0 else 0
             co2_sequestered = round(trees_df['co2_kg'].sum(), 2) if 'co2_kg' in trees_df.columns else 0
             map_df = trees_df[['latitude', 'longitude']].dropna()
-            
+
             metrics.update({
                 "institutions": institutions_count,
                 "total_trees": total_trees,
@@ -294,13 +294,13 @@ def get_landing_metrics():
     finally:
         if 'conn' in locals():
             conn.close()
-    
+
     return metrics
 
 def show_landing_page():
     set_custom_css()
     metrics = get_landing_metrics()
-    
+
     st.markdown("""
     <div class="landing-header">
         <h1>🌱 CarbonTally</h1>
@@ -308,10 +308,10 @@ def show_landing_page():
         <p>Join our mission to combat climate change one tree at a time.</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     st.markdown("## Our Impact at a Glance")
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.markdown(f"""
         <div class="metric-card">
@@ -320,7 +320,7 @@ def show_landing_page():
             <div>Individuals & Organizations</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
         st.markdown(f"""
         <div class="metric-card">
@@ -329,7 +329,7 @@ def show_landing_page():
             <div>And counting...</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col3:
         st.markdown(f"""
         <div class="metric-card">
@@ -338,7 +338,7 @@ def show_landing_page():
             <div>Thriving trees</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col4:
         st.markdown(f"""
         <div class="metric-card">
@@ -347,7 +347,7 @@ def show_landing_page():
             <div>kg carbon removed</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     st.markdown("## 🌍 Our Global Impact")
     if not metrics['map_data'].empty:
         fig = px.scatter_mapbox(
@@ -365,35 +365,35 @@ def show_landing_page():
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No tree location data available yet.")
-    
+
     st.markdown("""
     <div style="text-align: center; margin: 3rem 0;">
         <h2>Ready to make a difference?</h2>
         <p style="font-size: 1.1rem; margin-bottom: 2rem;">Join our community or support our mission today</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         if st.button("🌱 Login", key="landing_login", use_container_width=True):
             st.session_state.page = "Login"
             st.rerun()
-    
+
     with col2:
         if st.button("📝 Sign Up", key="landing_signup", use_container_width=True):
             st.session_state.page = "Sign Up"
             st.rerun()
-    
+
     with col3:
         if st.button("💚 Donate Now", key="landing_donate", use_container_width=True):
             st.session_state.page = "Donor Dashboard"
             st.rerun()
-    
+
     st.markdown("## ✨ Why Choose CarbonTally?")
-    
+
     feature_cols = st.columns(3)
-    
+
     with feature_cols[0]:
         st.markdown("""
         <div class="feature-card">
@@ -401,7 +401,7 @@ def show_landing_page():
             <p>Track the growth and health of every tree planted through our comprehensive monitoring system.</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with feature_cols[1]:
         st.markdown("""
         <div class="feature-card">
@@ -409,7 +409,7 @@ def show_landing_page():
             <p>Access detailed analytics on carbon sequestration, survival rates, and environmental impact.</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with feature_cols[2]:
         st.markdown("""
         <div class="feature-card">
@@ -430,7 +430,7 @@ def main():
     else:
         set_custom_css()
         init_db()
-        
+
         if FIREBASE_AUTH_MODULE_AVAILABLE:
             if not initialize_firebase():
                 st.error("Failed to initialize Firebase")
@@ -438,32 +438,32 @@ def main():
 
         with st.sidebar:
             st.markdown("<h3 style='color: #1D7749; margin-bottom: 1rem;'>🌱 CarbonTally</h3>", unsafe_allow_html=True)
-            
+
             if st.session_state.authenticated:
                 user = get_current_firebase_user()
                 if user:
                     st.markdown(f"**Welcome, {user.get('displayName', 'User')}!**")
-                    
+
                     if check_firebase_user_role(user, 'admin'):
                         page_options = ["Admin Dashboard", "User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
                     else:
                         page_options = ["User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
-                    
+
                     try:
                         current_page_index = page_options.index(st.session_state.page)
                     except ValueError:
                         current_page_index = 0
-                    
+
                     st.session_state.page = st.radio("Navigate to:", page_options, index=current_page_index)
-                    
+
                     if st.button("Logout", use_container_width=True):
                         firebase_logout()
                         st.session_state.page = "Login"
                         st.rerun()
             else:
-                st.session_state.page = st.radio("Choose an option:", 
+                st.session_state.page = st.radio("Choose an option:",
                     ["Login", "Sign Up", "Password Recovery", "Donor Dashboard"],
-                    index=["Login", "Sign Up", "Password Recovery", "Donor Dashboard"].index(st.session_state.page) 
+                    index=["Login", "Sign Up", "Password Recovery", "Donor Dashboard"].index(st.session_state.page)
                     if st.session_state.page in ["Login", "Sign Up", "Password Recovery", "Donor Dashboard"] else 0)
 
         if st.session_state.page == "Login":
@@ -475,14 +475,15 @@ def main():
         elif st.session_state.page == "Donor Dashboard":
             guest_donor_dashboard_ui()
         elif st.session_state.authenticated:
-                if st.session_state.page == "Admin Dashboard":
-                    st.markdown("<h1 class='header-text'>👑 Admin Dashboard</h1>", unsafe_allow_html=True)
-                    # Add a text input for the admin query
-                    admin_search_query = st.text_input("Enter Tree ID or Search Term for Admin Lookup:", key="admin_tree_lookup_input")
-                    # Call admin_tree_lookup with the provided query
-                    admin_tree_lookup(admin_search_query)
-                elif st.session_state.page == "User Dashboard":
-                    unified_user_dashboard_content()
+            if st.session_state.page == "Admin Dashboard":
+                st.markdown("<h1 class='header-text'>👑 Admin Dashboard</h1>", unsafe_allow_html=True)
+                # Add a text input for the admin query
+                admin_search_query = st.text_input("Enter Tree ID or Search Term for Admin Lookup:", key="admin_tree_lookup_input")
+                # Call admin_tree_lookup with the provided query
+                admin_tree_lookup(admin_search_query)
+            elif st.session_state.page == "User Dashboard":
+                unified_user_dashboard_content()
+            # Corrected indentation for the following two `elif` blocks
             elif st.session_state.page == "Plant a Tree":
                 plant_a_tree_section()
             elif st.session_state.page == "Monitor Trees":
