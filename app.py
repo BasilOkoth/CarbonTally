@@ -475,11 +475,14 @@ def main():
         elif st.session_state.page == "Donor Dashboard":
             guest_donor_dashboard_ui()
         elif st.session_state.authenticated:
-            if st.session_state.page == "Admin Dashboard":
-                st.markdown("<h1 class='header-text'>👑 Admin Dashboard</h1>", unsafe_allow_html=True)
-                admin_tree_lookup()
-            elif st.session_state.page == "User Dashboard":
-                unified_user_dashboard_content()
+                if st.session_state.page == "Admin Dashboard":
+                    st.markdown("<h1 class='header-text'>👑 Admin Dashboard</h1>", unsafe_allow_html=True)
+                    # Add a text input for the admin query
+                    admin_search_query = st.text_input("Enter Tree ID or Search Term for Admin Lookup:", key="admin_tree_lookup_input")
+                    # Call admin_tree_lookup with the provided query
+                    admin_tree_lookup(admin_search_query)
+                elif st.session_state.page == "User Dashboard":
+                    unified_user_dashboard_content()
             elif st.session_state.page == "Plant a Tree":
                 plant_a_tree_section()
             elif st.session_state.page == "Monitor Trees":
