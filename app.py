@@ -1,14 +1,27 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px # Added for plotting
+import plotly.graph_objects as go # Added for plotting
 import sqlite3
-from pathlib import Path
-from typing import Optional, Dict
+import datetime
+import re
+import random
+import os
 import time
+import json
+from pathlib import Path
+from io import BytesIO
+from typing import Optional, Tuple, Dict, Any
 
-# Database configuration
-BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
-DATA_DIR = BASE_DIR / "data"
-SQLITE_DB = DATA_DIR / "trees.db"
+# Third-party imports (ensure these are installed in your environment)
+# from geopy.geocoders import Nominatim # Uncomment if you use this
+# from geopy.distance import geodesic # Uncomment if you use this
+# import qrcode # Already in kobo_integration, but might be needed here if used directly
+# from PIL import Image # Already in kobo_integration, but might be needed here if used directly
+# import base64 # Already in kobo_integration, but might be needed here if used directly
+# import requests # Already in kobo_integration, but might be needed here if used directly
+# import paypalrestsdk # Uncomment if you're using PayPal
+# from paypalrestsdk import Payment # Uncomment if you're using PayPal
 
 # Custom module imports with error handling
 try:
@@ -49,7 +62,7 @@ except ImportError as e:
 try:
     from kobo_monitoring import (
         monitoring_section,
-        get_tree_details, # Ensure this is also in kobo_monitoring.py if used directly
+        get_tree_details,
         check_for_new_monitoring_submissions,
         admin_tree_lookup as admin_monitoring_lookup, # Now defined in kobo_monitoring.py
         initialize_database as initialize_monitoring_db # Assuming this is the primary initialize for Kobo monitoring
@@ -73,6 +86,11 @@ try:
 except ImportError:
     def add_branding_footer(): st.markdown("<p style='text-align:center;font-size:0.8em;color:grey;'>🌱 CarbonTally – Developed by Basil Okoth</p>", unsafe_allow_html=True)
 
+# Database configuration
+BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
+DATA_DIR = BASE_DIR / "data"
+SQLITE_DB = DATA_DIR / "trees.db"
+
 # Initialize directories
 DATA_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -83,6 +101,346 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded" # Keep sidebar expanded by default
 )
+
+def set_custom_css():
+    """Applies custom CSS to the Streamlit app."""
+    custom_css = """
+    <style>
+        /* Landing Page Specific Styles */
+        .landing-header {
+            background: linear-gradient(135deg, #1D7749 0%, #28a745 100%);
+            color: white;
+            padding: 3rem 1rem;
+            margin: -1rem -1rem 2rem -1rem;
+            border-radius: 0 0 20px 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .landing-header h1 {
+            font-size: 3.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 800;
+        }
+        
+        .landing-header p {
+            font-size: 1.2rem;
+            max-width: 800px;
+            margin: 0 auto 1.5rem auto;
+        }
+        
+        .landing-metric {
+            background-color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            text-align: center;
+            transition: all 0.3s ease;
+            border: 1px solid #e0e0e0;
+            height: 100%;
+        }
+        
+        .landing-metric:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        
+        .landing-metric-value {
+            font-size: 2.8rem;
+            font-weight: 700;
+            color: #1D7749;
+            margin: 0.5rem 0;
+            line-height: 1;
+        }
+        
+        .landing-metric-label {
+            font-size: 1rem;
+            color: #555;
+            margin-bottom: 0.5rem;
+        }
+        
+        .landing-cta {
+            background-color: #f8f9fa;
+            padding: 2rem;
+            border-radius: 12px;
+            margin: 2rem 0;
+            text-align: center;
+        }
+        
+        .landing-map-container {
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            margin: 2rem 0;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .landing-btn {
+            background-color: #1D7749 !important;
+            color: white !important;
+            border: none !important;
+            padding: 0.8rem 2rem !important;
+            font-size: 1.1rem !important;
+            border-radius: 8px !important;
+            margin: 0.5rem !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        .landing-btn:hover {
+            background-color: #15613b !important;
+            transform: translateY(-2px) !important;
+        }
+        
+        .landing-btn-secondary {
+            background-color: white !important;
+            color: #1D7749 !important;
+            border: 2px solid #1D7749 !important;
+        }
+        
+        .landing-btn-secondary:hover {
+            background-color: #f0f0f0 !important;
+        }
+        
+        .landing-features {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+        
+        .landing-feature {
+            flex: 1;
+            min-width: 250px;
+            background-color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            border: 1px solid #e0e0e0;
+        }
+        
+        .landing-feature h3 {
+            color: #1D7749;
+            margin-top: 0;
+        }
+        
+        @media (max-width: 768px) {
+            .landing-header h1 {
+                font-size: 2.5rem;
+            }
+            
+            .landing-metric-value {
+                font-size: 2rem;
+            }
+        }
+
+        /* Global Resets & Base Styles */
+        html, body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            background-color: #f0f2f5; /* Lighter, cleaner background */
+            color: #333;
+            line-height: 1.6;
+        }
+
+        /* Main App Container - More Compact */
+        .main .block-container {
+            padding-top: 1.5rem; /* Reduced top padding */
+            padding-bottom: 1.5rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+            max-width: 1200px; /* Constrain width for better readability on large screens */
+            margin: 0 auto;
+        }
+
+        /* Header Styling - Modern & Clean */
+        .header-text {
+            color: #1D7749; /* Deeper, more sophisticated green */
+            font-weight: 700;
+            font-size: 2.2rem; /* Slightly reduced for compactness */
+            margin-bottom: 1rem; /* Consistent spacing */
+            text-align: left;
+        }
+
+        /* Sidebar Styling - Clean & Functional */
+        .stSidebar {
+            background-color: #ffffff; /* White sidebar for cleaner look */
+            border-right: 1px solid #e0e0e0;
+            padding: 1rem;
+        }
+        .sidebar .sidebar-content h3 {
+            color: #1D7749;
+            font-size: 1.1rem;
+            margin-top: 0;
+        }
+        .sidebar .sidebar-content p {
+            font-size: 0.9rem;
+            color: #555;
+        }
+        .sidebar .stRadio > label {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #333;
+        }
+        .sidebar .stRadio div[role="radiogroup"] > div {
+            margin-bottom: 0.5rem;
+        }
+
+        /* Button Styling - Modern & Action-Oriented */
+        .stButton>button {
+            background-color: #28a745; /* Vibrant green */
+            color: white;
+            border-radius: 6px; /* Slightly less rounded */
+            padding: 0.6rem 1.2rem; /* Adjusted padding */
+            border: none;
+            font-weight: 600;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stButton>button:hover {
+            background-color: #218838; /* Darker on hover */
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .stButton>button:active {
+            transform: translateY(0px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* Card Styling - Elevated & Informative */
+        .card {
+            background-color: white;
+            border-radius: 8px; /* Consistent rounding */
+            padding: 1.2rem; /* Adjusted padding */
+            box-shadow: 0 3px 6px rgba(0,0,0,0.08); /* Softer shadow */
+            margin-bottom: 1.2rem;
+            border: 1px solid #e0e0e0;
+        }
+        .card h3 {
+            color: #1D7749;
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            font-size: 1.3rem;
+        }
+        .card p {
+            font-size: 0.95rem;
+            color: #444;
+            margin-bottom: 0.8rem;
+        }
+
+        /* Metric Card Styling - Impactful & Clear */
+        .metric-card {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.07);
+            margin-bottom: 1rem;
+            text-align: center;
+            border: 1px solid #e8e8e8;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 10px rgba(0,0,0,0.1);
+        }
+        .metric-value {
+            font-size: 2rem; /* Slightly reduced for compactness */
+            font-weight: 700;
+            color: #1D7749;
+            margin: 0.3rem 0;
+        }
+        .metric-label {
+            font-size: 0.85rem; /* Slightly reduced */
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Form Elements - Clean & User-Friendly */
+        .stTextInput input, .stDateInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] > div {
+            border-radius: 6px !important;
+            border: 1px solid #ccc !important;
+        }
+        .stTextArea textarea {
+            border-radius: 6px !important;
+            border: 1px solid #ccc !important;
+            padding: 0.75rem !important;
+        }
+        .stForm {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 1.5rem;
+            background-color: #f9f9f9;
+        }
+
+        /* Tabs Styling - Modern & Integrated */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px; /* Reduced gap */
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background-color: transparent; /* Cleaner look */
+            border-radius: 6px 6px 0 0 !important;
+            padding: 0.7rem 1.2rem; /* Adjusted padding */
+            color: #555;
+            font-weight: 600;
+            border: none !important; /* Remove default borders */
+            border-bottom: 2px solid transparent !important;
+            transition: all 0.2s ease-in-out;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: transparent !important;
+            color: #1D7749 !important;
+            border-bottom: 2px solid #1D7749 !important;
+        }
+
+        /* Footer Styling - Unobtrusive */
+        .footer {
+            margin-top: 2rem; /* Reduced margin */
+            padding: 1rem 0;
+            border-top: 1px solid #e0e0e0;
+            text-align: center;
+            font-size: 0.85rem;
+            color: #777;
+        }
+
+        /* Responsive Adjustments */
+        @media (max-width: 768px) {
+            .main .block-container {
+                padding-top: 1rem;
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+            }
+            .header-text {
+                font-size: 1.8rem;
+            }
+            .metric-card {
+                padding: 0.8rem;
+                margin-bottom: 0.8rem;
+            }
+            .metric-value {
+                font-size: 1.6rem;
+            }
+            .metric-label {
+                font-size: 0.75rem;
+            }
+            .stButton>button {
+                padding: 0.5rem 1rem;
+                width: 100%; /* Full width buttons on mobile */
+            }
+            .stTabs [data-baseweb="tab"] {
+                padding: 0.6rem 1rem;
+            }
+            .card {
+                padding: 1rem;
+            }
+            .stForm {
+                padding: 1rem;
+            }
+        }
+    </style>
+    """
+    st.markdown(custom_css, unsafe_allow_html=True)
 
 # --- Firebase Initialization ---
 if FIREBASE_AVAILABLE and 'firebase_initialized' not in st.session_state:
@@ -122,35 +480,54 @@ def get_active_user_and_update_state():
 
 # --- UI Components ---
 def show_landing_page():
-    st.title("Welcome to CarbonTally! 🌳")
+    # Use the landing-header class for styling the welcome section
+    st.markdown("<div class='landing-header'>", unsafe_allow_html=True)
+    st.markdown("<h1>Welcome to CarbonTally! 🌳</h1>", unsafe_allow_html=True)
     st.markdown("""
-        **CarbonTally** is a platform dedicated to tracking and monitoring tree planting initiatives.
+        <p><strong>CarbonTally</strong> is a platform dedicated to tracking and monitoring tree planting initiatives.
         We provide tools for individuals, schools, and institutions to record tree data,
-        track their growth, estimate CO2 sequestration, and engage in a community committed to a greener future.
-    """)
+        track their growth, estimate CO2 sequestration, and engage in a community committed to a greener future.</p>
+    """, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.subheader("Our Mission")
-    st.markdown("""
-        To empower communities with transparent and verifiable data on tree planting efforts,
-        fostering environmental stewardship and combating climate change one tree at a time.
-    """)
-
-    st.subheader("Key Features")
-    st.markdown("""
-    * **🌲 Tree Planting:** Record new tree data easily via KoBo forms.
-    * **📈 Tree Monitoring:** Track the growth and health of planted trees over time.
-    * **📊 CO₂ Sequestration:** Estimate the carbon impact of your trees.
-    * **🏅 Leaderboards & Badges:** Gamified engagement for planters.
-    * **🌍 Donor Dashboard:** Transparent impact tracking for donors.
-    * **🔒 Secure Authentication:** Manage user accounts with Firebase.
-    """)
-
+    st.markdown("<div class='landing-cta'>", unsafe_allow_html=True)
     st.subheader("Get Started")
     st.markdown("""
-    * **New Users:** [Sign Up](#sign-up) to start planting and monitoring trees!
-    * **Existing Users:** [Login](#login) to access your dashboard.
-    * **Donors:** Explore the [Donor Dashboard](#donor-dashboard) to see our impact and support initiatives.
-    """)
+    * **New Users:** <a href="#sign-up" class='landing-btn'>Sign Up</a> to start planting and monitoring trees!
+    * **Existing Users:** <a href="#login" class='landing-btn landing-btn-secondary'>Login</a> to access your dashboard.
+    * **Donors:** Explore the <a href="#donor-dashboard" class='landing-btn landing-btn-secondary'>Donor Dashboard</a> to see our impact and support initiatives.
+    """, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.subheader("Key Features")
+    st.markdown("<div class='landing-features'>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='landing-feature'>
+        <h3>🌲 Tree Planting</h3>
+        <p>Record new tree data easily via KoBo forms.</p>
+    </div>
+    <div class='landing-feature'>
+        <h3>📈 Tree Monitoring</h3>
+        <p>Track the growth and health of planted trees over time.</p>
+    </div>
+    <div class='landing-feature'>
+        <h3>📊 CO₂ Sequestration</h3>
+        <p>Estimate the carbon impact of your trees.</p>
+    </div>
+    <div class='landing-feature'>
+        <h3>🏅 Leaderboards & Badges</h3>
+        <p>Gamified engagement for planters.</p>
+    </div>
+    <div class='landing-feature'>
+        <h3>🌍 Donor Dashboard</h3>
+        <p>Transparent impact tracking for donors.</p>
+    </div>
+    <div class='landing-feature'>
+        <h3>🔒 Secure Authentication</h3>
+        <p>Manage user accounts with Firebase.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Participating Entities")
@@ -190,7 +567,7 @@ def unified_user_dashboard_content():
 
         # Placeholder for tree data associated with the user's tree_tracking_id
         st.subheader("Your Planted Trees")
-        current_user_tree_tracking_id = user.get('tree_tracking_number') # Corrected from tree_tracking_id to tree_tracking_number
+        current_user_tree_tracking_id = user.get('tree_tracking_number')
 
         if current_user_tree_tracking_id:
             conn = sqlite3.connect(SQLITE_DB)
@@ -224,10 +601,6 @@ def admin_dashboard_content():
 
         with tab1:
             st.subheader("User Management & Approval")
-            # This would link to or embed the admin_approval_dashboard from firebase_auth_integration
-            # Assuming admin_approval_dashboard is imported from firebase_auth_integration
-            # You might need to import admin_approval_dashboard from firebase_auth_integration
-            # and call it here. For now, it's a placeholder.
             st.warning("User management features (e.g., approval queue) coming soon!")
             # Example if admin_approval_dashboard exists in firebase_auth_integration:
             # if 'admin_approval_dashboard' in globals():
@@ -288,30 +661,15 @@ def admin_dashboard_content():
 
             st.markdown("---")
             st.subheader("Maintenance Tools")
-            # You'll need `bulk_update_co2_calculations` and `update_user_statistics` in your utility functions
             st.warning("Maintenance tools coming soon!")
-            # if st.button("🔄 Update All CO₂ Calculations", type="primary"):
-            #     with st.spinner("Updating CO₂ calculations..."):
-            #         updated_count = bulk_update_co2_calculations()
-            #         st.success(f"Updated CO₂ calculations for {updated_count} trees!")
-
-            # if st.button("📊 Refresh User Statistics"):
-            #     with st.spinner("Refreshing user statistics..."):
-            #         conn = sqlite3.connect(SQLITE_DB)
-            #         try:
-            #             users = pd.read_sql("SELECT DISTINCT COALESCE(planter_email, student_name) as user_email FROM trees WHERE COALESCE(planter_email, student_name) != ''", conn)
-            #             updated_users = 0
-            #             for _, user_row in users.iterrows():
-            #                 if update_user_statistics(user_row["user_email"]):
-            #                     updated_users += 1
-            #             st.success(f"Updated statistics for {updated_users} users!")
-            #         finally:
-            #             conn.close()
     else:
         st.error("Access denied. Admin privileges required.")
 
 def main():
     """Main application function to orchestrate the Streamlit app."""
+
+    # Apply custom CSS first
+    set_custom_css()
 
     # Check and update user session
     if 'user' not in st.session_state or not st.session_state.authenticated:
