@@ -17,14 +17,15 @@ import seaborn as sns
 # KoBo Toolbox configuration
 KOBO_API_URL = "https://kf.kobotoolbox.org/api/v2"
 try:
-    KOBO_API_TOKEN = st.secrets["KOBO"]["API_TOKEN"]
-    KOBO_ASSET_ID = st.secrets["KOBO"]["ASSET_ID"]
-    KOBO_MONITORING_ASSET_ID = st.secrets["KOBO"]["MONITORING_ASSET_ID"]
-except Exception as e:
-    st.warning(f"Could not load KoBo secrets: {e}")
-    KOBO_API_TOKEN = "dummy_token"
-    KOBO_ASSET_ID = "dummy_asset_id"
-    KOBO_MONITORING_ASSET_ID = "aDSNfsXbXygrn8rwKog5Yd"
+    KOBO_API_TOKEN = st.secrets["KOBO_API_TOKEN"] # Using directly from secrets
+    KOBO_ASSET_ID = st.secrets.get("KOBO_ASSET_ID") # For planting forms, might not be needed directly here
+    KOBO_MONITORING_ASSET_ID = st.secrets["KOBO_MONITORING_ASSET_ID"]
+except KeyError as e:
+    st.warning(f"Could not load KoBo monitoring secrets: {e}. Please ensure KOBO_API_TOKEN and KOBO_MONITORING_ASSET_ID are set in your secrets.toml.")
+    # Fallback to dummy values if secrets are not configured, for local testing flexibility
+    KOBO_API_TOKEN = "dummy_token_for_testing"
+    KOBO_ASSET_ID = "dummy_asset_id_for_testing"
+    KOBO_MONITORING_ASSET_ID = "aDSNfsXbXygrn8rwKog5Yd" # Placeholder from original file
 
 # Database configuration
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
@@ -42,10 +43,9 @@ def initialize_database():
         c.execute('''
             CREATE TABLE IF NOT EXISTS trees (
                 tree_id TEXT PRIMARY KEY,
-                institution TEXT,
                 local_name TEXT,
                 scientific_name TEXT,
-                student_name TEXT,
+                planters_name TEXT,
                 date_planted TEXT,
                 tree_stage TEXT,
                 rcd_cm REAL,
@@ -60,314 +60,259 @@ def initialize_database():
                 sub_county TEXT,
                 ward TEXT,
                 adopter_name TEXT,
-                last_monitored TEXT,
-                monitor_notes TEXT,
-                qr_code TEXT,
-                kobo_submission_id TEXT UNIQUE,
-                tree_tracking_number TEXT
+                last_updated TEXT,
+                planter_email TEXT,
+                planter_uid TEXT,
+                planter_tracking_id TEXT UNIQUE
             )
         ''')
-        
-        # Check and add tree_tracking_number if missing
-        c.execute("PRAGMA table_info(trees)")
-        if "tree_tracking_number" not in [col[1] for col in c.fetchall()]:
-            c.execute("ALTER TABLE trees ADD COLUMN tree_tracking_number TEXT")
-        
-        # Create monitoring_history table
+        # Add monitoring_records table
         c.execute('''
-            CREATE TABLE IF NOT EXISTS monitoring_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tree_id TEXT,
-                monitor_date TEXT,
-                monitor_status TEXT,
-                monitor_stage TEXT,
+            CREATE TABLE IF NOT EXISTS monitoring_records (
+                record_id TEXT PRIMARY KEY,
+                tree_id TEXT NOT NULL,
+                date_recorded TEXT,
+                tree_stage TEXT,
                 rcd_cm REAL,
                 dbh_cm REAL,
                 height_m REAL,
-                co2_kg REAL,
+                health_status TEXT,
                 notes TEXT,
-                monitor_by TEXT,
-                kobo_submission_id TEXT UNIQUE,
-                FOREIGN KEY (tree_id) REFERENCES trees (tree_id)
+                recorder_email TEXT,
+                FOREIGN KEY (tree_id) REFERENCES trees(tree_id)
             )
         ''')
-        
-        # Create processed submissions table
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS processed_monitoring_submissions (
-                submission_id TEXT PRIMARY KEY,
-                tree_id TEXT,
-                processed_date TEXT,
-                FOREIGN KEY (tree_id) REFERENCES trees (tree_id)
-            )
-        ''')
-        
         conn.commit()
     except Exception as e:
-        st.error(f"Database initialization error: {str(e)}")
+        st.error(f"Monitoring Database initialization error: {e}")
     finally:
         conn.close()
 
 def validate_user_session():
-    """Validate user session"""
-    if "user" not in st.session_state:
-        st.error("Please log in")
+    """Ensure user is logged in for certain actions."""
+    if 'authenticated' not in st.session_state or not st.session_state.authenticated:
+        st.warning("Please log in to perform this action.")
         return False
-        
-    required = ["username", "user_type"]
-    missing = [field for field in required if field not in st.session_state.user]
-    if missing:
-        st.error(f"Missing user fields: {', '.join(missing)}")
+    if 'user' not in st.session_state:
+        st.warning("User session data missing. Please log in again.")
         return False
-        
     return True
 
-def ensure_institution_assigned():
-    """Ensure institution is assigned to user"""
-    if "user" not in st.session_state:
-        return None
-        
-    if st.session_state.user.get("institution"):
-        return st.session_state.user["institution"]
-        
-    if st.session_state.user.get('user_type') in ["school", "field", "admin"]:
-        conn = sqlite3.connect(SQLITE_DB)
+def get_monitoring_submissions(asset_id, last_n_hours=None):
+    """Fetches monitoring submissions from a specific KoBo asset."""
+    headers = {"Authorization": f"Token {KOBO_API_TOKEN}"}
+    url = f"{KOBO_API_URL}/assets/{asset_id}/data/"
+    params = {"format": "json"}
+
+    if last_n_hours:
+        time_ago = datetime.utcnow() - timedelta(hours=last_n_hours)
+        params["query"] = json.dumps({"_submission_time": {"$gte": time_ago.isoformat(timespec='seconds') + 'Z'}})
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"HTTP error fetching monitoring submissions: {http_err} - Response: {response.text}")
+    except Exception as err:
+        st.error(f"Other error fetching monitoring submissions: {err}")
+    return []
+
+def map_kobo_monitoring_to_database(submission_data):
+    """Maps KoBo monitoring submission data to the database schema."""
+    record_id = str(uuid.uuid4())
+    tree_id = submission_data.get('tree_id_monitoring') # The tree ID being monitored
+    date_recorded = submission_data.get('date_of_monitoring')
+    tree_stage = submission_data.get('tree_status_update/tree_stage_current')
+    rcd_cm = submission_data.get('tree_status_update/rcd_cm_current')
+    dbh_cm = submission_data.get('tree_status_update/dbh_cm_current')
+    height_m = submission_data.get('tree_status_update/height_m_current')
+    health_status = submission_data.get('tree_status_update/health_status')
+    notes = submission_data.get('additional_notes')
+    recorder_email = submission_data.get('monitor_email') # Email of the person doing the monitoring
+
+    return {
+        "record_id": record_id,
+        "tree_id": tree_id,
+        "date_recorded": date_recorded,
+        "tree_stage": tree_stage,
+        "rcd_cm": rcd_cm,
+        "dbh_cm": dbh_cm,
+        "height_m": height_m,
+        "health_status": health_status,
+        "notes": notes,
+        "recorder_email": recorder_email
+    }
+
+def save_monitoring_record(record_data):
+    """Saves mapped monitoring record data to the SQLite database and updates tree."""
+    conn = sqlite3.connect(SQLITE_DB)
+    try:
+        c = conn.cursor()
+        columns = ', '.join(record_data.keys())
+        placeholders = ':' + ', :'.join(record_data.keys())
+        sql = f"INSERT INTO monitoring_records ({columns}) VALUES ({placeholders})"
+        c.execute(sql, record_data)
+
+        # Update the main trees table with the latest monitoring data
+        update_tree_sql = """
+            UPDATE trees
+            SET
+                tree_stage = ?,
+                rcd_cm = ?,
+                dbh_cm = ?,
+                height_m = ?,
+                status = ?, -- Can be derived from health_status or a separate field
+                co2_kg = ?, -- Recalculate based on new measurements
+                last_updated = ?
+            WHERE tree_id = ?
+        """
+        co2_kg = (
+            calculate_co2_sequestered(record_data['dbh_cm'], record_data['height_m'])
+            if record_data['dbh_cm'] and record_data['height_m'] else 0.0
+        )
+        c.execute(update_tree_sql, (
+            record_data['tree_stage'],
+            record_data['rcd_cm'],
+            record_data['dbh_cm'],
+            record_data['height_m'],
+            record_data['health_status'], # Using health_status as tree status for now
+            co2_kg,
+            datetime.utcnow().isoformat(),
+            record_data['tree_id']
+        ))
+        conn.commit()
+        st.success(f"Monitoring record for Tree ID {record_data['tree_id']} saved and tree data updated!")
+    except Exception as e:
+        st.error(f"Error saving monitoring record: {e}")
+    finally:
+        conn.close()
+
+def check_for_new_monitoring_submissions(hours=24):
+    """Checks for and processes new monitoring submissions."""
+    st.info(f"Checking for new monitoring submissions in the last {hours} hours...")
+    submissions = get_monitoring_submissions(KOBO_MONITORING_ASSET_ID, last_n_hours=hours)
+
+    if not submissions:
+        st.info("No new monitoring submissions found.")
+        return []
+
+    processed_records = []
+    for submission in submissions:
         try:
-            institutions = pd.read_sql(
-                "SELECT DISTINCT institution FROM trees WHERE institution IS NOT NULL",
-                conn
-            )["institution"].tolist()
+            mapped_data = map_kobo_monitoring_to_database(submission)
+            if mapped_data:
+                save_monitoring_record(mapped_data)
+                processed_records.append(mapped_data)
         except Exception as e:
-            st.error(f"Error fetching institutions: {str(e)}")
-            institutions = []
-        finally:
-            conn.close()
-            
-        if not institutions:
-            institutions = ["School A", "School B", "Other (specify)"]
-            
-        selected = st.selectbox("Select institution", ["-- Select --"] + institutions)
-        if selected == "Other (specify)":
-            selected = st.text_input("Enter institution name")
-            
-        if selected and selected != "-- Select --":
-            st.session_state.user["institution"] = selected
-            st.rerun()
-            
-    return st.session_state.user.get("institution")
+            st.error(f"Error processing monitoring submission {submission.get('_id')}: {e}")
+    if processed_records:
+        st.success(f"Successfully processed {len(processed_records)} new monitoring submissions.")
+    return processed_records
 
 def get_tree_details(tree_id):
-    """Get details for a specific tree"""
-    if not tree_id:
-        return None
-        
+    """Retrieves full details for a given tree_id from the database."""
     conn = sqlite3.connect(SQLITE_DB)
     try:
-        tree_df = pd.read_sql("SELECT * FROM trees WHERE tree_id = ?", conn, params=(tree_id,))
-        if tree_df.empty:
-            return None
-            
-        history_df = pd.read_sql(
-            "SELECT * FROM monitoring_history WHERE tree_id = ? ORDER BY monitor_date DESC",
-            conn,
-            params=(tree_id,)
-        )
-        
-        result = tree_df.iloc[0].to_dict()
-        result["monitoring_history"] = history_df.to_dict('records')
-        return result
+        df_tree = pd.read_sql_query(f"SELECT * FROM trees WHERE tree_id = '{tree_id}'", conn)
+        df_monitoring = pd.read_sql_query(f"SELECT * FROM monitoring_records WHERE tree_id = '{tree_id}' ORDER BY date_recorded DESC", conn)
+        if not df_tree.empty:
+            tree_data = df_tree.iloc[0].to_dict()
+            tree_data['monitoring_history'] = df_monitoring.to_dict(orient='records')
+            return tree_data
+        return None
     except Exception as e:
-        st.error(f"Error getting tree details: {str(e)}")
+        st.error(f"Error fetching tree details: {e}")
         return None
     finally:
         conn.close()
 
-def generate_tree_qr_code(tree_id, tree_data=None):
-    """Generate QR code for tree monitoring"""
-    try:
-        if tree_data is None:
-            tree_data = get_tree_details(tree_id)
-            if not tree_data:
-                return None, None
-                
-        params = {
-            "tree_id": tree_id,
-            "local_name": tree_data.get("local_name", ""),
-            "scientific_name": tree_data.get("scientific_name", ""),
-            "date_planted": tree_data.get("date_planted", ""),
-            "planter": tree_data.get("student_name", ""),
-            "institution": tree_data.get("institution", ""),
-            "tree_tracking_number": tree_data.get("tree_tracking_number", "")
-        }
-        
-        url_params = "&".join([f"{k}={v}" for k, v in params.items() if v])
-        monitoring_url = f"https://ee.kobotoolbox.org/x/{KOBO_MONITORING_ASSET_ID}?{url_params}"
-        
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(monitoring_url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="#2e8b57", back_color="white")
-        
-        file_path = QR_CODE_DIR / f"{tree_id}.png"
-        img.save(file_path)
-        
-        buffered = BytesIO()
-        img.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        return img_str, str(file_path)
-    except Exception as e:
-        st.error(f"QR generation error: {str(e)}")
-        return None, None
+def display_tree_details(tree_data):
+    """Displays detailed information about a single tree."""
+    st.subheader(f"Details for Tree ID: {tree_data.get('tree_id')}")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Species:** {tree_data.get('local_name')} ({tree_data.get('scientific_name')})")
+        st.write(f"**Planter:** {tree_data.get('planters_name')}")
+        st.write(f"**Date Planted:** {tree_data.get('date_planted')}")
+        st.write(f"**Current Status:** {tree_data.get('status')}")
+        st.write(f"**Current Stage:** {tree_data.get('tree_stage')}")
+    with col2:
+        st.write(f"**Current RCD:** {tree_data.get('rcd_cm'):.2f} cm")
+        st.write(f"**Current DBH:** {tree_data.get('dbh_cm'):.2f} cm")
+        st.write(f"**Current Height:** {tree_data.get('height_m'):.2f} m")
+        st.write(f"**Estimated CO₂:** {tree_data.get('co2_kg'):.2f} kg/year")
+        st.write(f"**Location:** Lat {tree_data.get('latitude')}, Lon {tree_data.get('longitude')}")
 
-def admin_tree_lookup():
-    """Admin tree lookup interface"""
-    if not validate_user_session() or st.session_state.user.get("user_type") != "admin":
-        st.error("Admin access required")
-        return
-        
-    tree_id = st.text_input("Enter Tree ID")
-    if tree_id:
-        tree_data = get_tree_details(tree_id)
-        if not tree_data:
-            st.error("Tree not found")
-            return
-            
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Local Name:**", tree_data.get("local_name", "N/A"))
-            st.write("**Scientific Name:**", tree_data.get("scientific_name", "N/A"))
-            st.write("**Institution:**", tree_data.get("institution", "N/A"))
-            st.write("**Planted By:**", tree_data.get("student_name", "N/A"))
-            
-        with col2:
-            st.write("**Status:**", tree_data.get("status", "N/A"))
-            st.write("**Growth Stage:**", tree_data.get("tree_stage", "N/A"))
-            st.write("**Last Monitored:**", tree_data.get("last_monitored", "N/A"))
-            
-        # QR Code section
-        qr_img, qr_path = generate_tree_qr_code(tree_data['tree_id'], tree_data)
-        if qr_img:
-            st.image(f"data:image/png;base64,{qr_img}", width=200)
-            if os.path.exists(qr_path):
-                with open(qr_path, "rb") as f:
-                    st.download_button(
-                        "Download QR Code",
-                        f.read(),
-                        file_name=f"tree_{tree_data['tree_id']}_qr.png"
-                    )
+    # Display monitoring history
+    monitoring_history = tree_data.get('monitoring_history', [])
+    if monitoring_history:
+        st.subheader("Monitoring History")
+        df_history = pd.DataFrame(monitoring_history)
+        # Convert date_recorded to datetime for sorting and plotting
+        df_history['date_recorded'] = pd.to_datetime(df_history['date_recorded'])
+        df_history = df_history.sort_values('date_recorded').reset_index(drop=True)
 
-def get_monitoring_stats():
-    """Get monitoring statistics"""
-    conn = sqlite3.connect(SQLITE_DB)
-    try:
-        stats = pd.read_sql(
-            """
-            SELECT 
-                COUNT(DISTINCT tree_id) as monitored_trees,
-                COUNT(*) as monitoring_events,
-                COALESCE(AVG(co2_kg), 0) as avg_co2,
-                SUM(CASE WHEN monitor_status = 'Alive' THEN 1 ELSE 0 END) as alive_count,
-                COUNT(DISTINCT monitor_by) as monitors_count
-            FROM monitoring_history
-            """,
-            conn
-        )
-        
-        by_date = pd.read_sql(
-            "SELECT monitor_date, COUNT(*) as count FROM monitoring_history GROUP BY monitor_date ORDER BY monitor_date",
-            conn
-        )
-        
-        by_institution = pd.read_sql(
-            """SELECT t.institution, COUNT(DISTINCT m.tree_id) as monitored_trees, COUNT(*) as monitoring_events
-               FROM monitoring_history m JOIN trees t ON m.tree_id = t.tree_id
-               GROUP BY t.institution ORDER BY monitored_trees DESC""",
-            conn
-        )
-        
-        growth_stages = pd.read_sql(
-            "SELECT monitor_stage, COUNT(*) as count FROM monitoring_history GROUP BY monitor_stage ORDER BY count DESC",
-            conn
-        )
-        
-        return {
-            "stats": stats.iloc[0].to_dict() if not stats.empty else {"avg_co2": 0},
-            "monitoring_by_date": by_date.to_dict('records'),
-            "monitoring_by_institution": by_institution.to_dict('records'),
-            "growth_stages": growth_stages.to_dict('records')
-        }
-    except Exception as e:
-        st.error(f"Error getting stats: {str(e)}")
-        return {
-            "stats": {"avg_co2": 0},
-            "monitoring_by_date": [],
-            "monitoring_by_institution": [],
-            "growth_stages": []
-        }
-    finally:
-        conn.close()
+        st.dataframe(df_history[['date_recorded', 'tree_stage', 'rcd_cm', 'dbh_cm', 'height_m', 'health_status', 'notes', 'recorder_email']])
 
-def display_monitoring_dashboard():
-    """Display monitoring dashboard"""
-    st.title("🌳 Tree Monitoring Dashboard")
-    
-    stats = get_monitoring_stats()
-    
-    cols = st.columns(4)
-    with cols[0]:
-        st.metric("Trees Monitored", stats["stats"].get("monitored_trees", 0))
-    with cols[1]:
-        st.metric("Monitoring Events", stats["stats"].get("monitoring_events", 0))
-    with cols[2]:
-        alive = stats["stats"].get("alive_count", 0)
-        total = stats["stats"].get("monitoring_events", 1)
-        rate = (alive / total) * 100 if total > 0 else 0
-        st.metric("Survival Rate", f"{rate:.1f}%")
-    with cols[3]:
-        avg_co2 = float(stats["stats"].get("avg_co2", 0))
-        st.metric("Avg. CO₂ per Tree", f"{avg_co2:.2f} kg")
-    
-    # Visualization tabs
-    tab1, tab2, tab3 = st.tabs(["By Institution", "Growth Stages", "Over Time"])
-    
-    with tab1:
-        if stats["monitoring_by_institution"]:
-            df = pd.DataFrame(stats["monitoring_by_institution"])
-            fig, ax = plt.subplots()
-            sns.barplot(x="institution", y="monitored_trees", data=df, ax=ax)
-            plt.xticks(rotation=45, ha="right")
-            st.pyplot(fig)
-        else:
-            st.info("No institution data")
-    
-    with tab2:
-        if stats["growth_stages"]:
-            df = pd.DataFrame(stats["growth_stages"])
-            fig, ax = plt.subplots()
-            ax.pie(df["count"], labels=df["monitor_stage"], autopct="%1.1f%%")
-            st.pyplot(fig)
-        else:
-            st.info("No growth stage data")
-    
-    with tab3:
-        if stats["monitoring_by_date"]:
-            df = pd.DataFrame(stats["monitoring_by_date"])
-            df["monitor_date"] = pd.to_datetime(df["monitor_date"])
-            fig, ax = plt.subplots()
-            sns.lineplot(x="monitor_date", y="count", data=df, ax=ax)
-            plt.xticks(rotation=45)
+        # Plot growth over time
+        if not df_history.empty:
+            st.subheader("Growth Timeline")
+            fig = plt.figure(figsize=(10, 5))
+            if 'dbh_cm' in df_history.columns and df_history['dbh_cm'].notna().any():
+                sns.lineplot(data=df_history, x='date_recorded', y='dbh_cm', marker='o', label='DBH (cm)')
+            if 'height_m' in df_history.columns and df_history['height_m'].notna().any():
+                sns.lineplot(data=df_history, x='date_recorded', y='height_m', marker='x', label='Height (m)')
+            plt.title(f"Growth Timeline for Tree ID: {tree_data.get('tree_id')}")
+            plt.xlabel("Date")
+            plt.ylabel("Measurement")
+            plt.legend()
             st.pyplot(fig)
         else:
             st.info("No timeline data")
+
+def display_monitoring_dashboard():
+    """Displays an overview dashboard of monitoring data."""
+    st.subheader("Monitoring Overview Dashboard")
+    conn = sqlite3.connect(SQLITE_DB)
+    try:
+        df_trees = pd.read_sql_query("SELECT * FROM trees", conn)
+        df_monitoring = pd.read_sql_query("SELECT * FROM monitoring_records", conn)
+
+        st.write(f"Total Trees Tracked: {len(df_trees)}")
+        st.write(f"Total Monitoring Records: {len(df_monitoring)}")
+
+        if not df_trees.empty:
+            st.subheader("Tree Status Distribution")
+            fig_status = px.pie(df_trees, names='status', title='Distribution of Tree Status')
+            st.plotly_chart(fig_status, use_container_width=True)
+
+            st.subheader("CO2 Sequestration by Species")
+            co2_by_species = df_trees.groupby('local_name')['co2_kg'].sum().reset_index()
+            fig_co2 = px.bar(co2_by_species, x='local_name', y='co2_kg', title='Total CO2 Sequestered by Species')
+            st.plotly_chart(fig_co2, use_container_width=True)
+
+        if not df_monitoring.empty:
+            st.subheader("Monitoring Activity Over Time")
+            df_monitoring['date_recorded'] = pd.to_datetime(df_monitoring['date_recorded'])
+            monitoring_counts = df_monitoring.groupby(df_monitoring['date_recorded'].dt.to_period('M')).size().reset_index(name='count')
+            monitoring_counts['date_recorded'] = monitoring_counts['date_recorded'].astype(str)
+            fig_activity = px.line(monitoring_counts, x='date_recorded', y='count', title='Number of Monitoring Records per Month')
+            st.plotly_chart(fig_activity, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error loading monitoring dashboard data: {e}")
+    finally:
+        conn.close()
+
 
 def monitoring_section():
     """Main monitoring interface"""
     st.title("🌳 Tree Monitoring System")
     initialize_database()
-    
+
     tabs = st.tabs(["Tree Lookup", "Monitoring Dashboard", "Process Submissions"])
-    
+
     with tabs[0]:
         tree_id = st.text_input("Enter Tree ID")
         if tree_id:
@@ -376,10 +321,10 @@ def monitoring_section():
                 display_tree_details(tree_data)
             else:
                 st.error("Tree not found")
-    
+
     with tabs[1]:
         display_monitoring_dashboard()
-    
+
     with tabs[2]:
         hours = st.slider("Hours to check", 1, 168, 24)
         if st.button("Check for New Submissions"):
@@ -393,12 +338,62 @@ def monitoring_section():
             else:
                 st.warning("Please log in")
 
+# --- Placeholder/Mapping functions for app.py imports ---
+# This function was listed in app.py's import.
+# Assuming admin_tree_lookup is intended to call admin_dashboard_monitoring.
+def admin_tree_lookup(query):
+    """
+    Placeholder for admin tree lookup.
+    Currently, it simply calls display_monitoring_dashboard or can be adapted.
+    If it requires a user_type for filtering, that needs to be passed.
+    For now, it returns an empty DataFrame to satisfy the import.
+    """
+    st.info(f"Admin tree lookup for query '{query}' is not fully implemented yet in kobo_monitoring.py. Displaying overall dashboard.")
+    display_monitoring_dashboard() # As a fallback, show the general dashboard
+    return pd.DataFrame() # Return empty DataFrame to satisfy potential return type expectations
+
+def calculate_co2_sequestered(dbh_cm, height_m):
+    """
+    Calculates estimated CO2 sequestered based on DBH and Height.
+    This is a simplified placeholder, copied from kobo_integration for consistency.
+    """
+    if dbh_cm is None or height_m is None or dbh_cm <= 0 or height_m <= 0:
+        return 0.0
+    co2_per_unit = 0.5 # kg CO2 per (cm DBH * m Height)
+    return dbh_cm * height_m * co2_per_unit
+
+# Initialize database when this module is imported
+initialize_database()
+
+# For local testing
 if __name__ == "__main__":
     st.set_page_config(page_title="Tree Monitoring", layout="wide")
+    # Simulate st.secrets for standalone testing
+    if "KOBO_API_TOKEN" not in st.secrets:
+        st.secrets["KOBO_API_TOKEN"] = "dummy_token_for_testing"
+        st.secrets["KOBO_ASSET_ID"] = "dummy_asset_id_for_testing"
+        st.secrets["KOBO_MONITORING_ASSET_ID"] = "aDSNfsXbXygrn8rwKog5Yd" # Use the provided one
+
+    # Simulate user session for testing this module directly
+    # This block is crucial for resolving "User session missing" when running kobo_monitoring.py directly
     if 'user' not in st.session_state:
         st.session_state.user = {
-            "username": "admin",
-            "user_type": "admin",
-            "email": "admin@example.com"
+            "username": "test_monitor_user", # Added a more distinct name
+            "user_type": "field", # or "admin", "school"
+            "email": "test@example.com",
+            "institution": "Test Institution",
+            "tree_tracking_number": "TRK123" # Example tracking number for testing
         }
+        print(f"[DEBUG_MAIN] Initializing mock user session for standalone run: {st.session_state.user}")
+    else:
+        print(f"[DEBUG_MAIN] User session already exists: {st.session_state.user}")
+    
+    # Simulate authentication state if running standalone
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = True
+
+    st.title("Tree Monitoring Module Test (Standalone)")
+    st.info("This is a standalone test for the KoBo monitoring functionality. "
+            "In a real app, this module is imported into `app.py`.")
+    
     monitoring_section()
