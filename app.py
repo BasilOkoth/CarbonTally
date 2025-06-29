@@ -237,7 +237,7 @@ def migrate_db_schema():
 
 # --- Custom Module Imports with Error Handling ---
 try:
-    from unified_user_dashboard_FINAL import (
+    from unified_user_dashboard import (
         unified_user_dashboard as unified_user_dashboard_content,
     )
 except ImportError as e:
@@ -1259,15 +1259,6 @@ def show_landing_page():
             st.session_state.page = "Donate"
             st.rerun()
 # Donor access button (full-width for visibility)
-st.markdown("---")
-st.markdown("### 🎁 Are you a Donor?")
-st.write("Skip login and explore tree impact or make an adoption directly.")
-
-if st.button("🌍 Continue as Donor", key="landing_donor", use_container_width=True):
-    st.session_state.page = "Donor Dashboard"
-    st.rerun()
-
-
     # Recent Activity in Two Columns - Now properly inside the show_landing_page function
     st.markdown('<div class="section-header">🔔 Recent Activity Feed</div>', unsafe_allow_html=True)
 
