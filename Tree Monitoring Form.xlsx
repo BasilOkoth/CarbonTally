@@ -1,0 +1,133 @@
+<?xml version="1.0"?>
+<h:html xmlns="http://www.w3.org/2002/xforms" xmlns:h="http://www.w3.org/1999/xhtml" xmlns:jr="http://openrosa.org/javarosa" xmlns:orx="http://openrosa.org/xforms">
+  <h:head>
+    <h:title>Tree Monitoring Form</h:title>
+    <model>
+      <instance>
+        <data id="tree_monitoring" version="1">
+          <tree_id/>
+          <monitor_date/>
+          <monitor_name/>
+          <tree_status/>
+          <tree_stage/>
+          <rcd_cm/>
+          <dbh_cm/>
+          <height_m/>
+          <monitor_notes/>
+          <location/>
+          <tree_photo/>
+          <damage_photo/>
+          <meta>
+            <instanceID/>
+          </meta>
+        </data>
+      </instance>
+      
+      <bind nodeset="/data/tree_id" type="string" required="true()"/>
+      <bind nodeset="/data/monitor_date" type="date" required="true()"/>
+      <bind nodeset="/data/monitor_name" type="string" required="true()"/>
+      <bind nodeset="/data/tree_status" type="select1" required="true()"/>
+      <bind nodeset="/data/tree_stage" type="select1"/>
+      <bind nodeset="/data/rcd_cm" type="decimal" constraint=". >= 0"/>
+      <bind nodeset="/data/dbh_cm" type="decimal" constraint=". >= 0" relevant="selected(/data/tree_stage, 'Seedling (0-1m)') = false()"/>
+      <bind nodeset="/data/height_m" type="decimal" constraint=". >= 0"/>
+      <bind nodeset="/data/location" type="geopoint" required="true()"/>
+      <bind nodeset="/data/damage_photo" relevant="selected(/data/tree_status, 'Damaged')"/>
+    </model>
+  </h:head>
+  <h:body>
+    <group appearance="field-list">
+      <label>Tree Identification</label>
+      <input ref="/data/tree_id">
+        <label>Tree ID (from QR code)</label>
+        <hint>Scan the tree's QR code or enter manually</hint>
+      </input>
+    </group>
+    
+    <group appearance="field-list">
+      <label>Monitoring Details</label>
+      <input ref="/data/monitor_date">
+        <label>Monitoring Date</label>
+      </input>
+      <input ref="/data/monitor_name">
+        <label>Monitor's Name</label>
+      </input>
+      <select1 ref="/data/tree_status">
+        <label>Tree Status</label>
+        <item>
+          <label>Alive</label>
+          <value>Alive</value>
+        </item>
+        <item>
+          <label>Damaged</label>
+          <value>Damaged</value>
+        </item>
+        <item>
+          <label>Dead</label>
+          <value>Dead</value>
+        </item>
+        <item>
+          <label>Removed</label>
+          <value>Removed</value>
+        </item>
+      </select1>
+      <select1 ref="/data/tree_stage">
+        <label>Growth Stage</label>
+        <item>
+          <label>Seedling (0-1m)</label>
+          <value>Seedling</value>
+        </item>
+        <item>
+          <label>Sapling (1-3m)</label>
+          <value>Sapling</value>
+        </item>
+        <item>
+          <label>Young (3-5m)</label>
+          <value>Young</value>
+        </item>
+        <item>
+          <label>Mature (>5m)</label>
+          <value>Mature</value>
+        </item>
+      </select1>
+    </group>
+    
+    <group appearance="field-list">
+      <label>Measurements</label>
+      <input ref="/data/rcd_cm">
+        <label>Root Collar Diameter (cm)</label>
+      </input>
+      <input ref="/data/dbh_cm">
+        <label>Diameter at Breast Height (cm)</label>
+        <hint>Only for trees taller than 1m</hint>
+      </input>
+      <input ref="/data/height_m">
+        <label>Height (meters)</label>
+      </input>
+    </group>
+    
+    <group appearance="field-list">
+      <label>Observations</label>
+      <input ref="/data/monitor_notes">
+        <label>Observations/Notes</label>
+      </input>
+    </group>
+    
+    <group appearance="field-list">
+      <label>Location</label>
+      <input ref="/data/location">
+        <label>Tree Location</label>
+      </input>
+    </group>
+    
+    <group appearance="field-list">
+      <label>Photos</label>
+      <upload ref="/data/tree_photo" mediatype="image/*">
+        <label>Tree Photo</label>
+      </upload>
+      <upload ref="/data/damage_photo" mediatype="image/*">
+        <label>Damage Photo (if applicable)</label>
+      </upload>
+    </group>
+  </h:body>
+</h:html>

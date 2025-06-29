@@ -1,0 +1,16 @@
+streamlit
+pandas
+numpy
+plotly
+geopy
+requests
+Pillow
+qrcode
+firebase-admin
+pyrebase4
+python-dotenv
+folium
+openpyxl
+matplotlib
+paypalrestsdk
+seaborn
