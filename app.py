@@ -664,7 +664,7 @@ def admin_dashboard_content():
     # Calculate metrics
     total_trees = len(trees)
     alive_trees = len(trees[trees["status"] == "Alive"]) if "status" in trees.columns else 0
-    survival_rate = f"{round((alive_trees / total_trees) * 100, 1)}%" if total_trees > 0 else "0%"
+    survival_rate = f"{round(((total_trees - dead_trees) / total_trees) * 100, 1)}%"
     co2_sequestered = f"{round(trees['co2_kg'].sum(), 2)} kg" if "co2_kg" in trees.columns else "0 kg"
     
     # Count unique organizations/individuals
