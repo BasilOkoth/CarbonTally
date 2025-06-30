@@ -1071,7 +1071,7 @@ def get_landing_metrics():
         metrics = {
             "institutions": institutions_count,
             "total_trees": total_trees,
-            "alive_trees": alive_trees,
+            "alive_trees": total_trees - dead_trees,
             "survival_rate": survival_rate,
             "co2_sequestered": round(trees_df['co2_kg'].sum(), 2) if 'co2_kg' in trees_df.columns else 0,
             "map_data": trees_df[['latitude', 'longitude']].dropna() if not trees_df.empty else pd.DataFrame()
