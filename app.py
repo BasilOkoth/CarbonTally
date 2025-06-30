@@ -237,7 +237,7 @@ def migrate_db_schema():
 
 # --- Custom Module Imports with Error Handling ---
 try:
-    from unified_user_dashboard import (
+    from unified_user_dashboard_FINAL import (
         unified_user_dashboard as unified_user_dashboard_content,
     )
 except ImportError as e:
