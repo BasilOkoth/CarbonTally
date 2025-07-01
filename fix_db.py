@@ -1,32 +1,24 @@
 import sqlite3
 
-trees_db = r"E:\CarbonTally-maintool\CarbonTally-main\data\trees.db"
+def add_rcd_and_notes_columns(db_path="monitoring.db"):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
 
-conn = sqlite3.connect(trees_db)
-cursor = conn.cursor()
+    # Check existing columns
+    cursor.execute("PRAGMA table_info(tree_monitoring)")
+    columns = [col[1] for col in cursor.fetchall()]
 
-# Add missing columns if they don't exist
-try:
-    cursor.execute("ALTER TABLE trees ADD COLUMN dbh_cm REAL;")
-except sqlite3.OperationalError:
-    print("Column 'dbh_cm' already exists")
+    if "rcd_cm" not in columns:
+        cursor.execute("ALTER TABLE tree_monitoring ADD COLUMN rcd_cm REAL")
+        print("✅ Added 'rcd_cm' column.")
 
-try:
-    cursor.execute("ALTER TABLE trees ADD COLUMN height_m REAL;")
-except sqlite3.OperationalError:
-    print("Column 'height_m' already exists")
+    if "notes" not in columns:
+        cursor.execute("ALTER TABLE tree_monitoring ADD COLUMN notes TEXT")
+        print("✅ Added 'notes' column.")
 
-try:
-    cursor.execute("ALTER TABLE trees ADD COLUMN co2_kg REAL;")
-except sqlite3.OperationalError:
-    print("Column 'co2_kg' already exists")
+    conn.commit()
+    conn.close()
+    print("🎉 Database updated successfully.")
 
-try:
-    cursor.execute("ALTER TABLE trees ADD COLUMN last_monitored_at TEXT;")
-except sqlite3.OperationalError:
-    print("Column 'last_monitored_at' already exists")
-
-conn.commit()
-conn.close()
-
-print("✅ Trees table updated with necessary columns.")
+# Run the function
+add_rcd_and_notes_columns()

@@ -2,6 +2,13 @@
 
 # ========== STREAMLIT SETUP ==========
 import streamlit as st
+from pathlib import Path
+import sqlite3
+
+def get_db_connection():
+    BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
+    SQLITE_DB = BASE_DIR / "data" / "trees.db"
+    return sqlite3.connect(SQLITE_DB)
 
 # ========== STANDARD LIBRARY IMPORTS ==========
 import os
@@ -72,21 +79,27 @@ import sqlite3
 import uuid
 import logging
 
-SQLITE_DB = "database.db"  # Set your DB path here
+SQLITE_DB = "data/trees.db"  # Ensure this is the consistent path
 
 def get_next_tree_id(user_full_name: str, tree_tracking_number: str, form_uuid: str) -> str:
     """
-    Generate a unique tree ID per form UUID using initials + sequence.
-    If the UUID has already been assigned a tree ID, return that.
+    Generate a unique tree ID using initials + sequence.
+    Raises error if generation fails instead of falling back to UUID.
     """
+    conn = sqlite3.connect(SQLITE_DB)
     try:
-        conn = sqlite3.connect(SQLITE_DB)
         c = conn.cursor()
 
-        # Check if tree ID already exists for this form UUID
+        # ✅ Ensure the sequences table exists
         c.execute("""
-            SELECT tree_id FROM trees WHERE form_uuid = ?
-        """, (form_uuid,))
+            CREATE TABLE IF NOT EXISTS sequences (
+                prefix TEXT PRIMARY KEY,
+                next_val INTEGER
+            )
+        """)
+
+        # Check if tree ID already exists for this form UUID
+        c.execute("SELECT tree_id FROM trees WHERE form_uuid = ?", (form_uuid,))
         result = c.fetchone()
         if result:
             return result[0]  # Return existing ID
@@ -98,33 +111,36 @@ def get_next_tree_id(user_full_name: str, tree_tracking_number: str, form_uuid: 
         elif len(parts) == 1:
             prefix = parts[0][:2]
         else:
-            prefix = "XX"
+            raise ValueError("Invalid name format for tree ID generation")
 
-        # Count existing trees for this tracking number
-        c.execute("""
-            SELECT COUNT(*) FROM trees WHERE tree_tracking_number = ?
-        """, (tree_tracking_number,))
-        count = c.fetchone()[0] + 1
-        suffix = f"{count:03d}"
+        # Get current sequence number for this prefix
+        c.execute("SELECT next_val FROM sequences WHERE prefix = ?", (prefix,))
+        row = c.fetchone()
+        next_val = row[0] if row else 1
 
+        # Format suffix
+        suffix = f"{next_val:03d}"
         tree_id = f"{prefix}{suffix}"
 
-        # Insert new tree record
-        c.execute("""
-            INSERT INTO trees (form_uuid, tree_id, tree_tracking_number)
-            VALUES (?, ?, ?)
-        """, (form_uuid, tree_id, tree_tracking_number))
-        conn.commit()
+        # Insert into sequences table or update
+        if row:
+            c.execute("UPDATE sequences SET next_val = ? WHERE prefix = ?", (next_val + 1, prefix))
+        else:
+            c.execute("INSERT INTO sequences (prefix, next_val) VALUES (?, ?)", (prefix, next_val + 1))
 
+        # Do NOT insert into trees here — that will be handled later
+
+        conn.commit()
         return tree_id
 
     except Exception as e:
+        conn.rollback()
         logging.error(f"Error generating tree ID: {e}")
-        return str(uuid.uuid4())[:8]
+        raise ValueError("Failed to generate tree ID")
 
     finally:
-        if 'conn' in locals():
-            conn.close()
+        conn.close()
+
 
 def initialize_database():
     conn = sqlite3.connect(SQLITE_DB)
@@ -196,61 +212,80 @@ def get_kobo_submissions(asset_id):
         st.error(f"Error fetching submissions: {str(e)}")
         return None
 def check_for_new_submissions():
-    asset_id = KOBO_ASSET_ID or st.secrets.get("KOBO_ASSET_ID")
-    if not asset_id:
-        st.error("KoBo asset ID is not set.")
+    """Check KoBoToolbox for new tree submissions and process them"""
+    try:
+        # Initialize KoBo credentials
+        initialize_kobo_credentials()
+        asset_id = KOBO_ASSET_ID
+        
+        if not asset_id:
+            st.error("KoBo asset ID is not configured.")
+            return []
+
+        # Get current user info
+        current_user = st.session_state.get('user', {})
+        user_tracking_number = current_user.get('treeTrackingNumber')
+        
+        if not user_tracking_number:
+            st.error("User tracking number not found. Please ensure you're logged in.")
+            return []
+
+        # Get all submissions from KoBo
+        submissions = get_kobo_submissions(asset_id)
+        if not submissions or 'results' not in submissions:
+            st.info("No submissions found in KoBoToolbox.")
+            return []
+
+        # Get already processed form UUIDs from database
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT form_uuid FROM trees")
+        saved_uuids = {row[0] for row in c.fetchall()}
+        conn.close()
+
+        # Process new submissions
+        processed_trees = []
+        for submission in submissions['results']:
+            form_uuid = submission.get('_uuid')
+            
+            # Skip if already processed or missing UUID
+            if not form_uuid or form_uuid in saved_uuids:
+                continue
+                
+            # Verify this submission belongs to current user
+            submission_tracking = submission.get('tree_tracking_number')
+            if submission_tracking != user_tracking_number:
+                continue
+
+            try:
+                # Map KoBo data to our database format
+                tree_data = map_kobo_to_database(submission)
+                
+                # Save to database
+                save_tree_data(tree_data)
+                
+                # Generate QR code
+                qr_path = generate_qr_code(
+                    tree_id=tree_data["tree_id"],
+                    tree_name=tree_data["local_name"],
+                    planter=tree_data["planters_name"],
+                    date_planted=tree_data["date_planted"]
+                )
+                
+                processed_trees.append({
+                    "data": tree_data,
+                    "qr_code_path": qr_path
+                })
+                
+            except Exception as e:
+                st.warning(f"Error processing submission {form_uuid}: {str(e)}")
+                continue
+
+        return processed_trees
+
+    except Exception as e:
+        st.error(f"Failed to check submissions: {str(e)}")
         return []
-
-    submissions = get_kobo_submissions(asset_id)
-    if not submissions:
-        return []
-
-    current_user = st.session_state.get('user', {})
-    user_tracking_number = current_user.get('treeTrackingNumber')
-
-    # Step 1: Get saved form UUIDs
-    print(f"📁 Using database: {SQLITE_DB}")
-    conn = sqlite3.connect(SQLITE_DB)
-    c = conn.cursor()
-    c.execute("SELECT form_uuid FROM trees")
-    saved_uuids = {row[0] for row in c.fetchall()}
-    conn.close()
-
-    # Step 2: Filter submissions
-    new_submissions = []
-    for submission in submissions.get('results', []):
-        form_uuid = submission.get('_uuid')
-        submission_tracking = submission.get('tree_tracking_number')
-
-        if (
-            form_uuid and
-            form_uuid not in saved_uuids and
-            submission_tracking == user_tracking_number
-        ):
-            new_submissions.append(submission)
-
-    # Step 3: Process only matching & new submissions
-    processed = []
-    for submission in new_submissions:
-        try:
-            tree_data = map_kobo_to_database(submission)
-            save_tree_data(tree_data)
-            qr_path = generate_qr_code(
-                tree_id=tree_data["tree_id"],
-                tree_name=tree_data["local_name"],
-                planter=tree_data["planters_name"],
-                date_planted=tree_data["date_planted"]
-            )
-            processed.append({
-                "data": tree_data,
-                "qr_code_path": qr_path
-            })
-        except Exception as e:
-            st.warning(f"Skipping submission due to error: {e}")
-            continue
-
-    return processed
-
 def map_kobo_to_database(submission):
     current_user = st.session_state.get('user', {})
     geolocation = submission.get('_geolocation', [None, None])
@@ -314,9 +349,6 @@ def calculate_co2_sequestered(dbh_cm, height_m):
     
     # More accurate formula using DBH and height
     return 0.25 * 3.14159 * (dbh_cm/100)**2 * height_m * 600 * 0.5 * 3.67
-
-from db_utils import get_db_connection
-
 
 def save_tree_data(tree_data):
     conn = get_db_connection()  # ✅ Use the consistent DB connector
@@ -441,8 +473,8 @@ def display_tree_results(tree_results):
                 st.markdown(f"**🔬 Scientific Name:** {data.get('scientific_name', 'Unknown')}")
                 st.markdown(f"**👤 Planted by:** {planter}")
                 st.markdown(f"**📅 Date Planted:** {date_planted}")
-                st.markdown(f"**📍 Coordinates:** {data.get('latitude', 'N/A')}, {data.get('longitude', 'N/A')}")
                 st.markdown(f"**🌱 CO₂ Sequestered:** {data.get('co2_kg', 0.0):.2f} kg")
+                # Removed the coordinates/map display
 
             with col2:
                 if tree.get("qr_code_path"):
@@ -458,7 +490,6 @@ def display_tree_results(tree_results):
                     )
                 else:
                     st.warning("QR code not available")
-
 # Add to kobo_integration.py
 def get_tree_metrics():
     """Return comprehensive tree metrics for dashboards"""
@@ -475,9 +506,9 @@ def get_tree_metrics():
         c.execute("SELECT SUM(co2_kg) FROM trees")
         total_co2 = c.fetchone()[0] or 0
         
-        # Get recent trees
+        # Get recent trees - now including planters_name
         c.execute("""
-            SELECT tree_id, local_name, date_planted, latitude, longitude 
+            SELECT tree_id, local_name, planters_name, date_planted, latitude, longitude 
             FROM trees 
             ORDER BY date_planted DESC 
             LIMIT 5
@@ -507,32 +538,53 @@ def get_tree_metrics():
     finally:
         conn.close()
 def plant_a_tree_section():
-
     st.title("🌳 Plant a Tree")
     
+    # Initialize session state variables
     if "kobo_form_launched" not in st.session_state:
         st.session_state.kobo_form_launched = False
     if "tree_results" not in st.session_state:
         st.session_state.tree_results = None
+    if "last_checked" not in st.session_state:
+        st.session_state.last_checked = None
 
+    # Step 1: Launch KoBo form
     if not st.session_state.kobo_form_launched:
-        if st.button("Launch Planting Form"):
+        st.markdown("### Step 1: Fill out the planting form")
+        st.write("Click the button below to open the tree planting form in a new tab.")
+        if st.button("Launch Planting Form", key="launch_form"):
             launch_kobo_form()
+            st.session_state.kobo_form_launched = True
             st.rerun()
         return
 
-    if st.button("Check for New Submissions"):
-        with st.spinner("Processing..."):
+    # Step 2: Check for submissions after form is completed
+    st.markdown("### Step 2: Check for submitted trees")
+    st.write("After completing the form in KoBoToolbox, click below to check for your submission.")
+    
+    if st.button("Check for New Submissions", key="check_submissions"):
+        with st.spinner("Checking for new tree submissions..."):
             st.session_state.tree_results = check_for_new_submissions()
+            st.session_state.last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             st.rerun()
 
+    # Show last checked time if available
+    if st.session_state.last_checked:
+        st.caption(f"Last checked: {st.session_state.last_checked}")
+
+    # Step 3: Display results if found
     if st.session_state.tree_results:
-        display_tree_results(st.session_state.tree_results)
-        if st.button("Plant Another Tree"):
+        if len(st.session_state.tree_results) > 0:
+            st.success(f"Found {len(st.session_state.tree_results)} new tree(s)!")
+            display_tree_results(st.session_state.tree_results)
+        else:
+            st.info("No new tree submissions found. Please ensure you've submitted the form in KoBoToolbox.")
+        
+        # Option to plant another tree
+        if st.button("Plant Another Tree", key="plant_another"):
             st.session_state.kobo_form_launched = False
             st.session_state.tree_results = None
             st.rerun()
-
 # ========== INITIALIZATION & ENTRY POINT ==========
 
 initialize_database()

@@ -181,35 +181,6 @@ def calculate_health_score(health_status):
     weighted_sum = sum(weights.get(k.lower(), 0) * v for k, v in health_status.items())
     return min(100, int((weighted_sum / total) * 100))
 
-def show_tree_details(tree_id, trees_df):
-    """Display detailed information about a specific tree"""
-    tree_data = trees_df[trees_df['tree_id'] == tree_id].iloc[0].to_dict()
-    
-    with st.expander(f"🌳 Detailed View: Tree {tree_id}", expanded=True):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Basic Information")
-            st.markdown(f"**Local Name:** {tree_data.get('local_name', 'N/A')}")
-            st.markdown(f"**Scientific Name:** {tree_data.get('scientific_name', 'N/A')}")
-            st.markdown(f"**Date Planted:** {tree_data.get('date_planted', 'N/A')}")
-            st.markdown(f"**Growth Stage:** {tree_data.get('tree_stage', 'N/A')}")
-            st.markdown(f"**Status:** {tree_data.get('status', 'N/A')}")
-        
-        with col2:
-            st.subheader("Measurements")
-            st.markdown(f"**Height:** {tree_data.get('height_m', 'N/A')} m")
-            st.markdown(f"**Diameter (DBH):** {tree_data.get('dbh_cm', 'N/A')} cm")
-            st.markdown(f"**CO₂ Sequestered:** {tree_data.get('co2_kg', 'N/A')} kg/year")
-            
-            st.subheader("Location")
-            try:
-                lat = float(tree_data.get('latitude'))
-                lon = float(tree_data.get('longitude'))
-                st.map(pd.DataFrame([{'lat': lat, 'lon': lon}]))
-            except Exception as e:
-                st.warning(f"Could not display map: {e}")
-
 def display_forest_overview(trees, metrics):
     """Display visual overview of the user's forest"""
     st.subheader("Your Forest at a Glance")
@@ -369,58 +340,80 @@ def display_tree_inventory(trees_df):
     st.markdown("## 🌳 Tree Inventory")
     st.markdown("---")
 
-    headers = ["Tree ID", "Local Name", "Scientific Name", "Date Planted",
+    # Updated headers to include planter name
+    headers = ["Tree ID", "Local Name", "Scientific Name", "Planter", "Date Planted",
                "Status", "Height (m)", "DBH (cm)", "CO₂ (kg)", ""]
+    
+    # Adjusted column widths
+    col_widths = [1.2, 2.0, 2.0, 2.0, 1.5, 1.2, 1.0, 1.0, 1.0, 0.6]
 
-    col_widths = [1.2, 2.2, 2.2, 1.8, 1.5, 1, 1, 1, 0.6]
-
+    # Display headers
     header_cols = st.columns(col_widths)
     for col, header in zip(header_cols, headers):
         col.markdown(f"**{header}**")
 
+    # Display each tree row
     for _, row in trees_df.iterrows():
         cols = st.columns(col_widths)
         cols[0].markdown(f"`{row.get('tree_id', 'N/A')[:8]}`")
         cols[1].write(row.get('local_name', 'N/A'))
         cols[2].write(row.get('scientific_name', 'N/A'))
-        cols[3].write(row.get('date_planted', 'N/A'))
-        cols[4].write(row.get('status', 'N/A'))
-        cols[5].write(f"{row.get('height_m', 0):.2f}" if pd.notna(row.get('height_m')) else "N/A")
-        cols[6].write(f"{row.get('dbh_cm', 0):.2f}" if pd.notna(row.get('dbh_cm')) else "N/A")
-        cols[7].write(f"{row.get('co2_kg', 0):.2f}" if pd.notna(row.get('co2_kg')) else "N/A")
+        cols[3].write(row.get('planters_name', 'N/A') or row.get('planter_id', 'N/A'))
+        cols[4].write(row.get('date_planted', 'N/A'))
+        cols[5].write(row.get('status', 'N/A'))
+        cols[6].write(f"{row.get('height_m', 0):.2f}" if pd.notna(row.get('height_m')) else "N/A")
+        cols[7].write(f"{row.get('dbh_cm', 0):.2f}" if pd.notna(row.get('dbh_cm')) else "N/A")
+        cols[8].write(f"{row.get('co2_kg', 0):.2f}" if pd.notna(row.get('co2_kg')) else "N/A")
 
-        if cols[8].button("\U0001F441", key=f"view_{row['tree_id']}"):
+        if cols[9].button("\U0001F441", key=f"view_{row['tree_id']}"):
             st.session_state.selected_tree = row['tree_id']
             st.session_state.qr_tree = row['tree_id']
 
     st.markdown("---")
 
+    # Show tree details when selected
     if st.session_state.get('selected_tree'):
         show_tree_details(st.session_state.selected_tree, trees_df)
         st.session_state.selected_tree = None
 
+    # Generate and display QR code when selected
     if st.session_state.get('qr_tree'):
         tree_id = st.session_state.qr_tree
         tree_data = trees_df[trees_df['tree_id'] == tree_id].iloc[0]
 
+        # Get tree details for QR code
         tree_name = tree_data.get('local_name', '')
-        planter = tree_data.get('planter_id', '') or tree_data.get('planters_name', '')
+        planter = tree_data.get('planters_name', '') or tree_data.get('planter_id', '')
         date_planted = tree_data.get('date_planted', '')
+        tracking_number = tree_data.get('tree_tracking_number', tree_id)
 
+        # Generate QR code that links to monitoring form
         qr_path = generate_qr_code(
             tree_id=tree_id,
-            tree_tracking_number=tree_data.get('tree_tracking_number'),
+            tree_tracking_number=tracking_number,
             tree_name=tree_name,
             planter=planter,
             date_planted=date_planted
         )
 
+        # Display QR code section
         st.markdown(f"### 📌 QR Code for Tree `{tree_id}`")
+        
         col1, col2 = st.columns([1, 2])
         with col1:
             if qr_path:
-                st.image(qr_path, caption="Scan to open KoBo form", width=200)
+                st.image(qr_path, caption="Scan to open monitoring form", width=200)
+        
         with col2:
+            st.markdown(f"""
+                **Tree Details:**
+                - **Local Name:** {tree_name}
+                - **Scientific Name:** {tree_data.get('scientific_name', 'N/A')}
+                - **Planter:** {planter}
+                - **Date Planted:** {date_planted}
+                - **Status:** {tree_data.get('status', 'N/A')}
+            """)
+            
             if qr_path:
                 with open(qr_path, "rb") as qr_file:
                     qr_bytes = qr_file.read()
@@ -435,6 +428,35 @@ def display_tree_inventory(trees_df):
         if st.button("Close QR Display", key="close_qr_button"):
             st.session_state.qr_tree = None
 
+
+def show_tree_details(tree_id, trees_df):
+    """Show detailed information about a specific tree (without map)"""
+    tree_data = trees_df[trees_df['tree_id'] == tree_id].iloc[0]
+    
+    st.markdown(f"### 🌿 Tree Details: `{tree_id}`")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"""
+            **Basic Information:**
+            - **Local Name:** {tree_data.get('local_name', 'N/A')}
+            - **Scientific Name:** {tree_data.get('scientific_name', 'N/A')}
+            - **Planter:** {tree_data.get('planters_name', 'N/A') or tree_data.get('planter_id', 'N/A')}
+            - **Date Planted:** {tree_data.get('date_planted', 'N/A')}
+            - **Status:** {tree_data.get('status', 'N/A')}
+        """)
+    
+    with col2:
+        st.markdown(f"""
+            **Measurements:**
+            - **Height:** {f"{tree_data.get('height_m', 0):.2f} m" if pd.notna(tree_data.get('height_m')) else "N/A"}
+            - **DBH:** {f"{tree_data.get('dbh_cm', 0):.2f} cm" if pd.notna(tree_data.get('dbh_cm')) else "N/A"}
+            - **CO₂ Sequestered:** {f"{tree_data.get('co2_kg', 0):.2f} kg" if pd.notna(tree_data.get('co2_kg')) else "N/A"}
+            - **Growth Stage:** {tree_data.get('tree_stage', 'N/A')}
+        """)
+    
+    st.markdown("---")
 def unified_user_dashboard():
     """Main dashboard function displaying user's tree portfolio with metrics and analytics"""
     # Authentication check

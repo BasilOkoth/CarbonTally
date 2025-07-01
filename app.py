@@ -1,3 +1,4 @@
+
 import streamlit as st
 from pathlib import Path
 import sqlite3
@@ -7,7 +8,7 @@ import qrcode
 from datetime import datetime
 import re
 from kobo_integration import initialize_database
-
+from carbonfao import calculate_co2_sequestered, get_ecological_zone
 # Initialize database
 initialize_database()
 
@@ -780,43 +781,225 @@ def admin_dashboard_content():
                 fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
 
-            # Tree Editing Section
-            st.markdown("<h4 style='color: #1D7749; margin-bottom: 1rem;'>Edit Tree Records</h4>", unsafe_allow_html=True)
-            edit_col1, edit_col2 = st.columns(2)
-            with edit_col1:
-                selected_tree_id = st.selectbox("Select Tree to Edit", options=filtered_trees['tree_id'].unique(), key="admin_tree_selector")
+# Tree Editing Section with proper submit button and imports
+def tree_editing_section():
+    st.markdown("<h4 style='color: #1D7749; margin-bottom: 1rem;'>Edit Tree Records</h4>", unsafe_allow_html=True)
 
-            if selected_tree_id:
-                tree_data = filtered_trees[filtered_trees['tree_id'] == selected_tree_id].iloc[0]
-                with st.form(f"edit_tree_{selected_tree_id}"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        valid_statuses = ["Alive", "Dead", "Dormant", "Removed"]
-                        status_value = tree_data.get('status')
-                        default_index = valid_statuses.index(status_value) if status_value in valid_statuses else 0
-                        updated_status = st.selectbox("Status", valid_statuses, index=default_index)
+    try:
+        # Load tree data
+        conn = sqlite3.connect(SQLITE_DB)
+        trees_query = "SELECT * FROM trees"
+        all_trees = pd.read_sql(trees_query, conn)
+        filtered_trees = all_trees.copy()  # Apply any filters here if needed
 
-                        updated_height = st.number_input("Height (m)", value=float(tree_data['height_m']) if 'height_m' in tree_data and pd.notna(tree_data['height_m']) else 0.0, min_value=0.0, step=0.1)
-                    with col2:
-                        growth_stages = ["Seedling", "Sapling", "Mature"]
-                        stage_value = tree_data.get('tree_stage')
-                        default_stage_index = growth_stages.index(stage_value) if stage_value in growth_stages else 0
-                        updated_stage = st.selectbox("Growth Stage", growth_stages, index=default_stage_index)
+        # Tree selection
+        selected_tree_id = st.selectbox(
+            "Select Tree to Edit", 
+            options=filtered_trees['tree_id'].unique(), 
+            key="admin_tree_selector"
+        )
 
-                        updated_co2 = st.number_input("CO₂ Sequestered (kg)", value=float(tree_data['co2_kg']) if 'co2_kg' in tree_data and pd.notna(tree_data['co2_kg']) else 0.0, min_value=0.0, step=0.1)
+        if selected_tree_id:
+            tree_data = filtered_trees[filtered_trees['tree_id'] == selected_tree_id].iloc[0]
+            
+            with st.form(f"edit_tree_{selected_tree_id}"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    updated_local_name = st.text_input(
+                        "Local Name", 
+                        value=tree_data.get('local_name', ''),
+                        key=f"local_name_{selected_tree_id}"
+                    )
+                    
+                    updated_scientific_name = st.text_input(
+                        "Scientific Name", 
+                        value=tree_data.get('scientific_name', ''),
+                        key=f"scientific_name_{selected_tree_id}"
+                    )
+                    
+                    updated_planters_name = st.text_input(
+                        "Planter's Name", 
+                        value=tree_data.get('planters_name', ''),
+                        key=f"planters_name_{selected_tree_id}"
+                    )
+                    
+                    updated_latitude = st.number_input(
+                        "Latitude",
+                        value=float(tree_data['latitude']) if 'latitude' in tree_data and pd.notna(tree_data['latitude']) else None,
+                        format="%.6f",
+                        key=f"latitude_{selected_tree_id}"
+                    )
+                    
+                    updated_longitude = st.number_input(
+                        "Longitude",
+                        value=float(tree_data['longitude']) if 'longitude' in tree_data and pd.notna(tree_data['longitude']) else None,
+                        format="%.6f",
+                        key=f"longitude_{selected_tree_id}"
+                    )
+                
+                with col2:
+                    updated_height = st.number_input(
+                        "Height (m)", 
+                        value=float(tree_data['height_m']) if 'height_m' in tree_data and pd.notna(tree_data['height_m']) else 0.0, 
+                        min_value=0.0, 
+                        step=0.1,
+                        key=f"height_{selected_tree_id}"
+                    )
+                    
+                    updated_dbh = st.number_input(
+                        "DBH (cm)", 
+                        value=float(tree_data['dbh_cm']) if 'dbh_cm' in tree_data and pd.notna(tree_data['dbh_cm']) else 0.0,
+                        min_value=0.0,
+                        step=0.1,
+                        key=f"dbh_{selected_tree_id}"
+                    )
+                    
+                    updated_rcd = st.number_input(
+                        "RCD (cm)", 
+                        value=float(tree_data['rcd_cm']) if 'rcd_cm' in tree_data and pd.notna(tree_data['rcd_cm']) else 0.0,
+                        min_value=0.0,
+                        step=0.1,
+                        key=f"rcd_{selected_tree_id}"
+                    )
+                    
+                    # CO2 Calculation
+                    if updated_height > 0 and (updated_dbh > 0 or updated_rcd > 0):
+                        diameter = updated_dbh if updated_dbh > 0 else updated_rcd
+                        updated_co2 = calculate_co2_sequestered(
+                            dbh_cm=diameter,
+                            height_m=updated_height,
+                            species=updated_scientific_name,
+                            latitude=updated_latitude,
+                            longitude=updated_longitude
+                        )
+                        
+                        with st.expander("Calculation Details"):
+                            zone = get_ecological_zone(updated_latitude, updated_longitude) if updated_latitude and updated_longitude else "Unknown"
+                            st.write(f"**Ecological Zone:** {zone}")
+                            st.write(f"**Calculation Method:** FAO Allometric Equation")
+                            st.write(f"**DBH:** {diameter:.1f} cm")
+                            st.write(f"**Height:** {updated_height:.1f} m")
+                        
+                        st.metric("Calculated CO₂ Sequestered (kg)", f"{updated_co2:.2f}")
+                    else:
+                        updated_co2 = tree_data.get('co2_kg', 0.0)
+                        st.warning("Enter height and diameter measurements to calculate CO₂")
+                    
+                    # Status and growth stage
+                    valid_statuses = ["Alive", "Dead", "Dormant", "Removed"]
+                    status_value = tree_data.get('status')
+                    default_index = valid_statuses.index(status_value) if status_value in valid_statuses else 0
+                    updated_status = st.selectbox(
+                        "Status", 
+                        valid_statuses, 
+                        index=default_index,
+                        key=f"status_{selected_tree_id}"
+                    )
+                    
+                    growth_stages = ["Seedling", "Sapling", "Mature"]
+                    stage_value = tree_data.get('tree_stage')
+                    default_stage_index = growth_stages.index(stage_value) if stage_value in growth_stages else 0
+                    updated_stage = st.selectbox(
+                        "Growth Stage", 
+                        growth_stages, 
+                        index=default_stage_index,
+                        key=f"stage_{selected_tree_id}"
+                    )
+                
+                # Proper submit button inside the form
+                submitted = st.form_submit_button("Update Tree Record", type="primary")
+                
+                if submitted:
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE trees SET 
+                                local_name = ?,
+                                scientific_name = ?,
+                                planters_name = ?,
+                                height_m = ?,
+                                dbh_cm = ?,
+                                rcd_cm = ?,
+                                co2_kg = ?,
+                                status = ?,
+                                tree_stage = ?,
+                                latitude = ?,
+                                longitude = ?,
+                                last_updated = CURRENT_TIMESTAMP
+                            WHERE tree_id = ?
+                        """, (
+                            updated_local_name,
+                            updated_scientific_name,
+                            updated_planters_name,
+                            updated_height,
+                            updated_dbh,
+                            updated_rcd,
+                            updated_co2,
+                            updated_status,
+                            updated_stage,
+                            updated_latitude,
+                            updated_longitude,
+                            selected_tree_id
+                        ))
+                        conn.commit()
+                        st.success("Tree record updated successfully!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error updating tree: {str(e)}")
+    
+    except Exception as e:
+        st.error(f"Error loading tree data: {str(e)}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
-                    if st.form_submit_button("Update Tree Record", type="primary"):
-                        try:
-                            conn = sqlite3.connect(SQLITE_DB)
-                            cursor = conn.cursor()
-                            cursor.execute("""UPDATE trees SET status = ?, height_m = ?, tree_stage = ?, co2_kg = ? WHERE tree_id = ?""", 
-                                         (updated_status, updated_height, updated_stage, updated_co2, selected_tree_id))
-                            conn.commit()
-                            st.success("Tree record updated successfully!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error updating tree: {str(e)}")
+# In your main page layout where you have tabs, make sure to define them properly:
+def admin_dashboard_content():
+    """Admin dashboard with tree management, user management, analytics, and tree lookup"""
+    # Initialize trees DataFrame
+    try:
+        conn = sqlite3.connect(SQLITE_DB)
+        trees = pd.read_sql_query("SELECT * FROM trees", conn)
+    except Exception as e:
+        st.error(f"Error loading tree data: {str(e)}")
+        trees = pd.DataFrame()  # Empty DataFrame as fallback
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
+    # Now you can safely check if trees.empty
+    if trees.empty:
+        st.info("No tree data available")
+        return
+
+    # Rest of your dashboard content...
+    users = get_all_users()
+    
+    # Calculate metrics
+    total_trees = len(trees)
+    dead_trees = len(trees[trees["status"] == "Dead"]) if "status" in trees.columns else 0
+    survival_rate = f"{round(((total_trees - dead_trees) / total_trees) * 100, 1)}%"
+    co2_sequestered = f"{round(trees['co2_kg'].sum(), 2)} kg" if "co2_kg" in trees.columns else "0 kg"
+    
+    # Continue with the rest of your dashboard implementation...   
+    # Enhanced tabs with icons
+    tab1, tab2, tab3, tab4 = st.tabs(["🌳 Tree Management", "👥 User Management", "📊 Analytics", "🔍 Tree Lookup"])
+
+    with tab1:
+        tree_editing_section()  # Our corrected tree editing function
+        
+    with tab2:
+        # User management content
+        pass
+        
+    with tab3:
+        # Analytics content
+        pass
+        
+    with tab4:
+        # Tree lookup content
+        pass
     with tab2:
         st.markdown("<h3 style='color: #1D7749; margin-bottom: 1rem;'>👥 User Management</h3>", unsafe_allow_html=True)
         try:
@@ -1329,7 +1512,7 @@ def main():
     if st.session_state.page == "Landing":
         show_landing_page()
     else:
-        set_custom_css() # Apply app-wide CSS
+        set_custom_css()  # Apply app-wide CSS
 
         # Initialize Firebase if the module is available
         if FIREBASE_AUTH_MODULE_AVAILABLE:
@@ -1339,38 +1522,52 @@ def main():
 
         # Sidebar navigation
         with st.sidebar:
-            st.markdown("<h3 style='color: #1D7749; margin-bottom: 1rem;'>🌱 CarbonTally</h3>", unsafe_allow_html=True)
+            st.markdown(
+                "<h3 style='color: #1D7749; margin-bottom: 1rem;'>🌱 CarbonTally</h3>",
+                unsafe_allow_html=True
+            )
 
             if st.session_state.authenticated:
                 user = get_current_firebase_user()
-                if user:
-                    st.markdown(f"**Welcome, {user.get('displayName', 'User')}!**")
 
-                    if check_firebase_user_role(user, 'admin'):
-                        # Admin gets access to all dashboards and direct planting/monitoring
-                        page_options = ["Admin Dashboard", "User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
-                    else:
-                        # Regular users get user dashboard and direct planting/monitoring
-                        page_options = ["User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
+                # ─── INSERTED: populate session_state.user once after login ────
+                if user and "user" not in st.session_state:
+                    st.session_state.user = {
+                        "username":           user.get("displayName", user.get("email", "guest")),
+                        "email":              user.get("email"),
+                        "uid":                user.get("uid"),
+                        "treeTrackingNumber": user.get("treeTrackingNumber", "")
+                    }
+                # ───────────────────────────────────────────────────────────────
 
-                    try:
-                        current_page_index = page_options.index(st.session_state.page)
-                    except ValueError:
-                        current_page_index = 0 # Default to the first option if current page is not in list
+                st.markdown(f"**Welcome, {user.get('displayName', 'User')}!**")
 
-                    st.session_state.page = st.radio("Navigate to:", page_options, index=current_page_index)
+                if check_firebase_user_role(user, 'admin'):
+                    page_options = ["Admin Dashboard", "User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
+                else:
+                    page_options = ["User Dashboard", "Plant a Tree", "Monitor Trees", "Donor Dashboard"]
 
-                    if st.button("Logout", use_container_width=True):
-                        firebase_logout()
-                        st.session_state.authenticated = False
-                        st.session_state.page = "Login"
-                        st.rerun() # Rerun to refresh the UI to login page
+                try:
+                    current_page_index = page_options.index(st.session_state.page)
+                except ValueError:
+                    current_page_index = 0
+
+                st.session_state.page = st.radio("Navigate to:", page_options, index=current_page_index)
+
+                if st.button("Logout", use_container_width=True):
+                    firebase_logout()
+                    st.session_state.authenticated = False
+                    st.session_state.page = "Login"
+                    st.rerun()
             else:
                 # Options for unauthenticated users
-                st.session_state.page = st.radio("Choose an option:",
+                st.session_state.page = st.radio(
+                    "Choose an option:",
                     ["Login", "Sign Up", "Password Recovery", "Donor Dashboard"],
-                    index=["Login", "Sign Up", "Password Recovery", "Donor Dashboard"].index(st.session_state.page)
-                    if st.session_state.page in ["Login", "Sign Up", "Password Recovery", "Donor Dashboard"] else 0)
+                    index=(["Login", "Sign Up", "Password Recovery", "Donor Dashboard"]
+                           .index(st.session_state.page)
+                           if st.session_state.page in ["Login", "Sign Up", "Password Recovery", "Donor Dashboard"] else 0)
+                )
 
         # Main content area based on selected page
         if st.session_state.page == "Login":
@@ -1381,32 +1578,19 @@ def main():
             firebase_password_recovery_ui()
         elif st.session_state.page == "Donor Dashboard":
             guest_donor_dashboard_ui()
-        elif st.session_state.authenticated: # Only show these pages if authenticated
+        elif st.session_state.authenticated:
             if st.session_state.page == "Admin Dashboard":
                 admin_dashboard_content()
             elif st.session_state.page == "User Dashboard":
-                # This is the main unified user dashboard with its own internal tabs
                 unified_user_dashboard_content()
             elif st.session_state.page == "Plant a Tree":
-                # Direct call to planting section (now imported from unified_user_dashboard)
                 plant_a_tree_section()
             elif st.session_state.page == "Monitor Trees":
-                # Direct call to monitoring section (now imported from unified_user_dashboard)
                 monitoring_section()
         else:
-            # If authenticated is False and page is not one of the login/signup options, redirect to login
             st.warning("Please log in to access this page.")
             firebase_login_ui()
-
-        add_branding_footer() # Always include the branding footer at the bottom
-
-# --- Custom Module Imports with Error Handling ---
-import streamlit as st
-
-try:
-    from branding_footer import add_branding_footer
-except ImportError:
-    def add_branding_footer():
+def add_branding_footer():
         st.markdown("""
             <style>
                 footer {
@@ -1424,7 +1608,8 @@ except ImportError:
             </footer>
         """, unsafe_allow_html=True)
 
+
 # --- Entry Point for the Streamlit app ---
 if __name__ == "__main__":
     main()
-    add_branding_footer()  # ✅ Always shown, even before login
+    add_branding_footer()

@@ -1,3 +1,21 @@
+def get_ecological_zone(lat, lon):
+    """Determine ecological zone based on latitude"""
+    if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+        return None
+        
+    if lat < -23.5:
+        return "Subtropical Southern Hemisphere"
+    elif lat > 23.5:
+        return "Subtropical Northern Hemisphere"
+    elif -10 <= lat <= 10:
+        return "Tropical Rainforest"
+    elif -23.5 <= lat < -10:
+        return "Tropical Dry Forest"
+    elif 10 < lat <= 23.5:
+        return "Tropical Moist Forest"
+    else:
+        return "Temperate Forest"
+
 def calculate_co2_sequestered(dbh_cm, height_m, species=None, latitude=None, longitude=None):
     """
     Calculate CO₂ sequestered by a tree based on its dimensions and location.
@@ -21,24 +39,6 @@ def calculate_co2_sequestered(dbh_cm, height_m, species=None, latitude=None, lon
         raise ValueError("DBH and height must be numeric values")
     if dbh_cm <= 0 or height_m <= 0:
         return 0.0
-
-    def get_ecological_zone(lat, lon):
-        """Determine ecological zone based on latitude"""
-        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return None
-            
-        if lat < -23.5:
-            return "Subtropical Southern Hemisphere"
-        elif lat > 23.5:
-            return "Subtropical Northern Hemisphere"
-        elif -10 <= lat <= 10:
-            return "Tropical Rainforest"
-        elif -23.5 <= lat < -10:
-            return "Tropical Dry Forest"
-        elif 10 < lat <= 23.5:
-            return "Tropical Moist Forest"
-        else:
-            return "Temperate Forest"
 
     def get_zone_coefficients(zone, species=None):
         """Get biomass coefficients for the ecological zone"""
