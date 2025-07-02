@@ -1,3 +1,4 @@
+# Streamlit page config - MUST BE THE VERY FIRST STREAMLIT COMMAND
 
 import streamlit as st
 from pathlib import Path
@@ -9,16 +10,14 @@ from datetime import datetime
 import re
 from kobo_integration import initialize_database
 from carbonfao import calculate_co2_sequestered, get_ecological_zone
-# Initialize database
-initialize_database()
-
-# Streamlit page config - MUST BE THE VERY FIRST STREAMLIT COMMAND
 st.set_page_config(
     page_title="CarbonTally",
     page_icon="🌳",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# Initialize database
+initialize_database()
 
 # --- Paths and Constants ---
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
@@ -658,16 +657,19 @@ def admin_dashboard_content():
     """, unsafe_allow_html=True)
 
     st.markdown("<h1 class='header-text'>🌳 Admin Dashboard</h1>", unsafe_allow_html=True)
-
     trees = load_tree_data()
-    users = get_all_users()
-    
-    # Calculate metrics
     total_trees = len(trees)
-    dead_trees = len(trees[trees["status"] == "Dead"]) if "status" in trees.columns else 0
-    survival_rate = f"{round(((total_trees - dead_trees) / total_trees) * 100, 1)}%"
+    alive_trees = len(trees[trees["status"] == "Alive"]) if "status" in trees.columns else 0
+    survival_rate = f"{round((alive_trees / total_trees) * 100, 1)}%" if total_trees > 0 else "0%"
     co2_sequestered = f"{round(trees['co2_kg'].sum(), 2)} kg" if "co2_kg" in trees.columns else "0 kg"
-    
+
+    st.markdown("<h4 style='color: #1D7749; margin-bottom: 0.5rem;'>System Overview</h4>", unsafe_allow_html=True)
+    cols = st.columns(4)
+    with cols[0]: st.metric("Total Trees", total_trees)
+    with cols[1]: st.metric("Alive Trees", alive_trees)
+    with cols[2]: st.metric("Survival Rate", survival_rate)
+    with cols[3]: st.metric("CO₂ Sequestered", co2_sequestered)
+
     # Count unique organizations/individuals
     if 'organization' in trees.columns:
         org_counts = trees['organization'].nunique()
@@ -956,7 +958,176 @@ def tree_editing_section():
 
 # In your main page layout where you have tabs, make sure to define them properly:
 def admin_dashboard_content():
-    """Admin dashboard with tree management, user management, analytics, and tree lookup"""
+          # Custom CSS for the dashboard
+    st.markdown("""
+    <style>
+        /* Main header styling */
+        .header-text {
+            color: #2c3e50;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            border-bottom: 3px solid #27ae60;
+            padding-bottom: 0.5rem;
+        }
+        
+        /* Metric card styling */
+        .metric-card {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #27ae60;
+            transition: transform 0.3s ease;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .metric-title {
+            color: #7f8c8d;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .metric-value {
+            color: #2c3e50;
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        
+        /* Tab styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            background-color: #f8f9fa;
+            border-radius: 8px 8px 0 0 !important;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .stTabs [aria-selected="true"] {
+            background-color: #27ae60 !important;
+            color: white !important;
+        }
+        
+        /* Table styling */
+        .stDataFrame {
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Button styling */
+        .stButton>button {
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .stButton>button:hover {
+            transform: scale(1.02);
+        }
+        
+        /* Custom success button */
+        .success-button {
+            background-color: #27ae60 !important;
+            color: white !important;
+        }
+        
+        /* Custom danger button */
+        .danger-button {
+            background-color: #e74c3c !important;
+            color: white !important;
+        }
+        
+        /* Custom warning button */
+        .warning-button {
+            background-color: #f39c12 !important;
+            color: white !important;
+        }
+        
+        /* Form styling */
+        .stForm {
+            border-radius: 10px;
+            padding: 1.5rem;
+            background-color: #f8f9fa;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* QR code container */
+        .qr-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin: 1rem 0;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<h1 class='header-text'>🌳 Admin Dashboard</h1>", unsafe_allow_html=True)
+
+    trees = load_tree_data()
+    users = get_all_users()
+    
+    # Calculate metrics
+
+    # Calculate metrics
+    total_planted = len(trees)
+    dead_trees = len(trees[trees["status"] == "Dead"]) if "status" in trees.columns else 0
+    survival_rate = f"{round(((total_planted - dead_trees) / total_planted) * 100, 1)}%" if total_planted > 0 else "0%"
+    co2_sequestered = f"{round(trees['co2_kg'].sum(), 2)} kg" if "co2_kg" in trees.columns else "0 kg"
+    
+    # Count unique organizations/individuals
+    if 'organization' in trees.columns:
+        org_counts = trees['organization'].nunique()
+    else:
+        org_counts = trees['planter_id'].nunique() if 'planter_id' in trees.columns else 0
+    
+    # System Overview Metrics with custom cards
+    st.markdown("<h4 style='color: #1D7749; margin-bottom: 1.5rem;'>🌍 System Overview</h4>", unsafe_allow_html=True)
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown("""
+            <div class='metric-card'>
+                <div class='metric-title'>Total Trees</div>
+                <div class='metric-value'>{}</div>
+            </div>
+        """.format(total_planted), unsafe_allow_html=True)
+    
+    with cols[1]:
+        st.markdown("""
+            <div class='metric-card'>
+                <div class='metric-title'>CO₂ Sequestered</div>
+                <div class='metric-value'>{}</div>
+            </div>
+        """.format(co2_sequestered), unsafe_allow_html=True)
+    
+    with cols[2]:
+        st.markdown("""
+            <div class='metric-card'>
+                <div class='metric-title'>Survival Rate</div>
+                <div class='metric-value'>{}</div>
+            </div>
+        """.format(survival_rate), unsafe_allow_html=True)
+    
+    with cols[3]:
+        st.markdown("""
+            <div class='metric-card'>
+                <div class='metric-title'>Organizations/Individuals</div>
+                <div class='metric-value'>{}</div>
+            </div>
+        """.format(org_counts), unsafe_allow_html=True)
     # Initialize trees DataFrame
     try:
         conn = sqlite3.connect(SQLITE_DB)
@@ -988,6 +1159,76 @@ def admin_dashboard_content():
 
     with tab1:
         tree_editing_section()  # Our corrected tree editing function
+    # Add the new Tree Inventory section here:
+        st.markdown("<h3 style='color: #1D7749; margin-bottom: 1rem;'>🌿 Tree Inventory</h3>", unsafe_allow_html=True)
+
+        if trees.empty:
+            st.info("No tree data available.")
+        else:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                institution_options = ["All"] + sorted(trees['institution'].dropna().unique().tolist()) if 'institution' in trees.columns else ["All"]
+                institution_filter = st.selectbox("Filter by Institution", institution_options)
+
+            with col2:
+                planter_options = ["All"] + sorted(trees['planters_name'].dropna().unique().tolist()) if 'planters_name' in trees.columns else ["All"]
+                planter_filter = st.selectbox("Filter by Planter", planter_options)
+
+            filtered = trees.copy()
+            if institution_filter != "All":
+                filtered = filtered[filtered['institution'] == institution_filter]
+            if planter_filter != "All":
+                filtered = filtered[filtered['planters_name'] == planter_filter]
+
+            display_cols = [
+                "tree_id", "tree_tracking_number", "planters_name", "institution",
+                "date_planted", "local_name", "scientific_name",
+                "rcd_cm", "dbh_cm", "height_m", "co2_kg", "status",
+                "latitude", "longitude"
+            ]
+            column_labels = {
+                "tree_id": "Tree ID",
+                "tree_tracking_number": "Tracking #",
+                "planters_name": "Planter",
+                "institution": "Institution",
+                "date_planted": "Date Planted",
+                "local_name": "Local Name",
+                "scientific_name": "Scientific Name",
+                "rcd_cm": "RCD (cm)",
+                "dbh_cm": "DBH (cm)",
+                "height_m": "Height (m)",
+                "co2_kg": "CO₂ (kg)",
+                "status": "Status",
+                "latitude": "Latitude",
+                "longitude": "Longitude"
+            }
+
+            filtered_display = filtered[display_cols].rename(columns=column_labels)
+
+            def highlight_tree_rows(val):
+                if isinstance(val, str) and val == "Dead":
+                    return "background-color: #f8d7da; color: #721c24;"
+                if isinstance(val, float) and val < 0.5:
+                    return "color: #d35400; font-weight: bold;"
+                return ""
+
+            st.markdown("### 📋 Filtered Tree Records", unsafe_allow_html=True)
+            st.dataframe(
+                filtered_display.style.applymap(
+                    highlight_tree_rows,
+                    subset=["Status", "CO₂ (kg)"]
+                ),
+                use_container_width=True
+            )
+
+            csv = filtered_display.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📅 Download Filtered Tree Inventory",
+                data=csv,
+                file_name=f"carbontally_tree_inventory_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
         
     with tab2:
         # User management content
@@ -1208,7 +1449,7 @@ def admin_dashboard_content():
                     # QR Code Section
                     st.markdown("<h4 style='color: #1D7749; margin-bottom: 1rem;'>📲 Tree QR Code</h4>", unsafe_allow_html=True)
                     with st.container():
-                        qr_base64, qr_file_path = generate_qr_code(tree_data['tree_id'])
+                        qr_base64, qr_file_path = generate_qr_code(tree_data['tree_id'], tree_data.to_dict())
                         
                         if qr_base64:
                             st.markdown("""
@@ -1590,26 +1831,15 @@ def main():
         else:
             st.warning("Please log in to access this page.")
             firebase_login_ui()
-def add_branding_footer():
-        st.markdown("""
-            <style>
-                footer {
-                    position: fixed;
-                    bottom: 0;
-                    width: 100%;
-                    padding: 10px 0;
-                    background-color: #f9f9f9;
-                }
-            </style>
-            <footer>
-                <p style='text-align:center;font-size:0.8em;color:grey;'>
-                    🌱 CarbonTally – Developed by Basil Okoth
-                </p>
-            </footer>
-        """, unsafe_allow_html=True)
-
-
 # --- Entry Point for the Streamlit app ---
 if __name__ == "__main__":
     main()
-    add_branding_footer()
+st.markdown("---")
+st.markdown("""
+    <div style='text-align: center; font-size: 0.9rem; color: gray;'>
+        <strong>CarbonTally</strong> | Making Every Tree Count 🌱<br>
+        Developed by <a href="mailto:okothbasil45@gmail.com">Basil Okoth</a> |
+        <a href="https://www.linkedin.com/in/kaudobasil/" target="_blank">LinkedIn</a><br>
+        © 2025 CarbonTally. All rights reserved.
+    </div>
+""", unsafe_allow_html=True)
