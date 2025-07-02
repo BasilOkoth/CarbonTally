@@ -251,10 +251,10 @@ def monitoring_section():
         if conn2:
             try:
                 df_monitor = pd.read_sql_query("SELECT * FROM tree_monitoring", conn2)
-                total_co2 = df_monitor["co2_kg"].sum()
-                total_trees_monitored = df_monitor["tree_id"].nunique()
-                st.metric("Total CO₂ Sequestered", f"{total_co2:.2f} kg")
-                st.metric("Trees Monitored", total_trees_monitored)
+                #total_co2 = df_monitor["co2_kg"].sum()
+                #total_trees_monitored = df_monitor["tree_id"].nunique()
+                #st.metric("Total CO₂ Sequestered", f"{total_co2:.2f} kg")
+                #st.metric("Trees Monitored", total_trees_monitored)
             except sqlite3.Error as e:
                 st.error(f"Error loading monitoring summary: {e}")
             finally:

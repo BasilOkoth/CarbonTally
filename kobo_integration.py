@@ -585,6 +585,19 @@ def plant_a_tree_section():
             st.session_state.kobo_form_launched = False
             st.session_state.tree_results = None
             st.rerun()
+ # Tree planting form button
+    form_url = "https://ee.kobotoolbox.org/x/s8ntxUM5"
+    st.markdown(f"""
+    <a href="{form_url}" target="_blank">
+        <button style='background-color:#1D7749; color:white; padding:0.75rem 1.5rem;
+                        border:none; border-radius:8px; font-size:1rem; cursor:pointer;'>
+            📋 Open Tree Planting Form
+        </button>
+    </a>
+    """, unsafe_allow_html=True)
+
+
+
 # ========== INITIALIZATION & ENTRY POINT ==========
 
 initialize_database()
