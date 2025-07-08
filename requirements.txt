@@ -15,3 +15,4 @@ matplotlib
 paypalrestsdk
 seaborn
 pyperclip
+streamlit-js-eval
