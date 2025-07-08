@@ -195,7 +195,7 @@ You can monitor a tree in two ways:
                 st.dataframe(nearby)
                 selected_tree_id = st.selectbox("Select a tree to monitor", nearby["Tree ID"])
                 if st.button("📋 Monitor This Tree"):
-                    form_url = f"https://ee.kobotoolbox.org/x/{KOBO_MONITORING_FORM_ID}?tree_id={selected_tree_id}&tree_tracking_number={entered_tracking_number}"
+                    form_url = f"https://ee.kobotoolbox.org/x/{KOBO_MONITORING_ASSET}?tree_id={selected_tree_id}&tree_tracking_number={entered_tracking_number}"
                     st.markdown(f"**[📝 Open Monitoring Form for Tree {selected_tree_id}]({form_url})**", unsafe_allow_html=True)
             else:
                 st.info("No trees found within 3–5 meters.")
