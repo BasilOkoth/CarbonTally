@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 import pyperclip
 import json
+import time
+import random # Added for generate_field_password
 
 # Configuration
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
@@ -16,11 +18,11 @@ def load_tree_data_by_tracking_number(tracking_number):
     """Load tree data filtered by tracking number"""
     if not tracking_number:
         return pd.DataFrame()
-    
+
     try:
         conn = sqlite3.connect(SQLITE_DB)
         query = """
-        SELECT * FROM trees 
+        SELECT * FROM trees
         WHERE tree_tracking_number = ?
         """
         df = pd.read_sql(query, conn, params=(tracking_number,))
@@ -30,6 +32,7 @@ def load_tree_data_by_tracking_number(tracking_number):
     finally:
         conn.close()
     return df
+
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
 from pathlib import Path
@@ -43,7 +46,14 @@ def generate_qr_code(tree_id, tree_tracking_number=None, tree_name=None, planter
         tracking_param = tree_tracking_number or tree_id
 
         # Construct KoBo URL with optional prefill parameters
-        base_url = "https://ee.kobotoolbox.org/x/dXdb36aV"
+        # Ensure KOBO_FORM_CODE is available, falling back if not
+        try:
+            from kobo_integration import KOBO_FORM_CODE
+            base_url = f"https://ee.kobotoolbox.org/x/{KOBO_FORM_CODE}"
+        except ImportError:
+            st.warning("KOBO_FORM_CODE not found. Using a placeholder URL for QR code generation.")
+            base_url = "https://ee.kobotoolbox.org/x/placeholder_form_code" # Fallback URL
+
         params = f"?tree_id={tracking_param}"
         if tree_name:
             params += f"&name={tree_name.replace(' ', '+')}"
@@ -88,16 +98,19 @@ def load_monitoring_history(tracking_number):
     """Load monitoring history for trees with given tracking number"""
     if not tracking_number:
         return pd.DataFrame()
-    
+
     try:
         conn = sqlite3.connect(SQLITE_DB)
+        
+        # Corrected query to join trees and monitoring_history
         query = """
-        SELECT m.* 
-        FROM monitoring_records m
+        SELECT m.*
+        FROM monitoring_history m
         JOIN trees t ON m.tree_id = t.tree_id
         WHERE t.tree_tracking_number = ?
         ORDER BY m.monitor_date DESC
         """
+        
         df = pd.read_sql(query, conn, params=(tracking_number,))
     except Exception as e:
         st.error(f"Error loading monitoring data: {str(e)}")
@@ -115,9 +128,9 @@ def calculate_tree_metrics(trees):
             'total_co2_absorbed': 0.0,
             'growth_stages': {'seedling': 0, 'sapling': 0, 'mature': 0},
             'health_status': {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0},
-            'status_counts': {'alive': 0, 'dead': 0, 'dormant': 0}
+            'status_counts': {'alive': 0, 'dead': 0, 'dormant': 0, 'removed': 0} # Added 'removed'
         }
-    
+
     # Ensure co2_kg is numeric
     if 'co2_kg' in trees.columns:
         trees['co2_kg'] = pd.to_numeric(trees['co2_kg'], errors='coerce').fillna(0.0)
@@ -131,7 +144,7 @@ def calculate_tree_metrics(trees):
         'total_co2_absorbed': total_co2_absorbed,
         'growth_stages': {'seedling': 0, 'sapling': 0, 'mature': 0},
         'health_status': {'excellent': 0, 'good': 0, 'fair': 0, 'poor': 0},
-        'status_counts': {'alive': 0, 'dead': 0, 'dormant': 0}
+        'status_counts': {'alive': 0, 'dead': 0, 'dormant': 0, 'removed': 0}
     }
 
     # Track growth stages
@@ -147,7 +160,22 @@ def calculate_tree_metrics(trees):
             elif 'mature' in stage_lower:
                 metrics['growth_stages']['mature'] += 1
 
-    # Track health status
+    # Track health status (using 'status' column from trees df if 'monitor_status' not directly available)
+    if 'status' in trees.columns:
+        for status_val in trees['status']:
+            if pd.isna(status_val):
+                continue
+            status_lower = str(status_val).lower()
+            if 'alive' in status_lower:
+                metrics['status_counts']['alive'] += 1
+            elif 'dead' in status_lower:
+                metrics['status_counts']['dead'] += 1
+            elif 'dormant' in status_lower:
+                metrics['status_counts']['dormant'] += 1
+            elif 'removed' in status_lower:
+                metrics['status_counts']['removed'] += 1
+
+    # If there's a 'monitor_status' from monitoring_history, use that for health_status
     if 'monitor_status' in trees.columns:
         for health in trees['monitor_status']:
             if pd.isna(health):
@@ -170,57 +198,63 @@ def calculate_health_score(health_status):
     total = sum(health_status.values())
     if total == 0:
         return 0
-        
+
     weights = {
         'excellent': 1.0,
         'good': 0.8,
         'fair': 0.6,
         'poor': 0.3
     }
-    
+
     weighted_sum = sum(weights.get(k.lower(), 0) * v for k, v in health_status.items())
     return min(100, int((weighted_sum / total) * 100))
 
 def display_forest_overview(trees, metrics):
     """Display visual overview of the user's forest"""
     st.subheader("Your Forest at a Glance")
-    
+
     if trees.empty:
         st.info("No trees found in your forest yet.")
         return
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.write("#### Tree Status")
-        if metrics['status_counts']:
+        # Filter out zero counts for better pie chart display
+        status_counts_filtered = {k: v for k, v in metrics['status_counts'].items() if v > 0}
+        if status_counts_filtered:
             status_df = pd.DataFrame.from_dict(
-                metrics['status_counts'], 
-                orient='index', 
+                status_counts_filtered,
+                orient='index',
                 columns=['Count']
             )
             fig = px.pie(
-                status_df, 
-                values='Count', 
+                status_df,
+                values='Count',
                 names=status_df.index,
                 color=status_df.index,
                 color_discrete_map={
                     'alive': '#28a745',
                     'dormant': '#ffc107',
-                    'dead': '#dc3545'
+                    'dead': '#dc3545',
+                    'removed': '#6c757d' # Added color for 'removed'
                 }
             )
             st.plotly_chart(fig, use_container_width=True)
-    
+        else:
+            st.info("No tree status data to display.")
+
+
     with col2:
         st.write("#### Species Distribution")
         if metrics['species_count']:
             species_df = pd.DataFrame.from_dict(
-                metrics['species_count'], 
-                orient='index', 
+                metrics['species_count'],
+                orient='index',
                 columns=['Count']
             ).sort_values('Count', ascending=False).head(5)
-            
+
             fig = px.bar(
                 species_df,
                 orientation='h',
@@ -229,7 +263,9 @@ def display_forest_overview(trees, metrics):
             )
             fig.update_layout(showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
-    
+        else:
+            st.info("No species data to display.")
+
     if 'latitude' in trees.columns and 'longitude' in trees.columns:
         st.write("#### Tree Locations")
         map_trees = trees.dropna(subset=['latitude', 'longitude'])
@@ -241,7 +277,7 @@ def display_forest_overview(trees, metrics):
                 hover_name='tree_id',
                 hover_data=['local_name', 'date_planted', 'status'],
                 color='status',
-                color_discrete_map={'Alive': '#28a745', 'Dead': '#dc3545', 'Dormant': '#ffc107'},
+                color_discrete_map={'Alive': '#28a745', 'Dead': '#dc3545', 'Dormant': '#ffc107', 'Removed': '#6c757d'},
                 zoom=10,
                 height=500
             )
@@ -251,84 +287,85 @@ def display_forest_overview(trees, metrics):
                 hovermode='closest'
             )
             st.plotly_chart(fig_map, use_container_width=True)
+        else:
+            st.info("No tree location data available.")
 
 def display_growth_analytics(trees, monitoring_history):
     """Display growth analytics and trends"""
     st.subheader("Growth Analytics")
-    
-    if trees.empty or monitoring_history.empty:
+
+    if trees.empty and monitoring_history.empty:
         st.info("No growth data available yet.")
         return
-    
-    monitoring_history['monitor_date'] = pd.to_datetime(monitoring_history['monitor_date'])
-    trees['date_planted'] = pd.to_datetime(trees['date_planted'])
-    
-    st.write("#### Height Growth Over Time")
-    fig = px.line(
-        monitoring_history,
-        x='monitor_date',
-        y='height_m',
-        color='tree_id',
-        labels={'height_m': 'Height (m)', 'monitor_date': 'Date'},
-        color_discrete_sequence=px.colors.sequential.Greens
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    st.write("#### Diameter Growth Over Time")
-    fig = px.line(
-        monitoring_history,
-        x='monitor_date',
-        y='dbh_cm',
-        color='tree_id',
-        labels={'dbh_cm': 'Diameter at Breast Height (cm)', 'monitor_date': 'Date'},
-        color_discrete_sequence=px.colors.sequential.Greens
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    if 'co2_kg' in trees.columns:
+
+    # Ensure date columns are datetime objects
+    if not monitoring_history.empty and 'monitor_date' in monitoring_history.columns:
+        monitoring_history['monitor_date'] = pd.to_datetime(monitoring_history['monitor_date'], errors='coerce')
+        monitoring_history = monitoring_history.dropna(subset=['monitor_date']) # Drop rows with invalid dates
+
+    if not trees.empty and 'date_planted' in trees.columns:
+        trees['date_planted'] = pd.to_datetime(trees['date_planted'], errors='coerce')
+        trees = trees.dropna(subset=['date_planted']) # Drop rows with invalid dates
+
+    if not monitoring_history.empty and 'height_m' in monitoring_history.columns:
+        st.write("#### Height Growth Over Time")
+        fig = px.line(
+            monitoring_history,
+            x='monitor_date',
+            y='height_m',
+            color='tree_id',
+            labels={'height_m': 'Height (m)', 'monitor_date': 'Date'},
+            color_discrete_sequence=px.colors.sequential.Greens
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No height monitoring data available.")
+
+    if not monitoring_history.empty and 'dbh_cm' in monitoring_history.columns:
+        st.write("#### Diameter Growth Over Time")
+        fig = px.line(
+            monitoring_history,
+            x='monitor_date',
+            y='dbh_cm',
+            color='tree_id',
+            labels={'dbh_cm': 'Diameter at Breast Height (cm)', 'monitor_date': 'Date'},
+            color_discrete_sequence=px.colors.sequential.Greens
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No diameter monitoring data available.")
+
+    if 'co2_kg' in trees.columns and not trees.empty:
         st.write("#### CO₂ Sequestration Projection")
         projection_years = 5
         projection_data = []
-        
+
         for _, tree in trees.iterrows():
             if pd.isna(tree['co2_kg']):
                 continue
-                
+
             for year in range(projection_years):
                 projection_data.append({
                     'tree_id': tree['tree_id'],
                     'year': year + 1,
-                    'co2_kg': tree['co2_kg'] * (1 + year * 0.2)
+                    'co2_kg': tree['co2_kg'] * (1 + year * 0.2) # Simple linear projection
                 })
-        
+
         projection_df = pd.DataFrame(projection_data)
-        fig = px.line(
-            projection_df,
-            x='year',
-            y='co2_kg',
-            color='tree_id',
-            labels={'co2_kg': 'CO₂ Sequestered (kg)', 'year': 'Years from now'},
-            color_discrete_sequence=px.colors.sequential.Greens
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-import streamlit as st
-import pandas as pd
-import qrcode
-from io import BytesIO
-import base64
-
-import streamlit as st
-import pandas as pd
-
-import streamlit as st
-import pandas as pd
-
-import streamlit as st
-import pandas as pd
-
-import streamlit as st
-import pandas as pd
+        if not projection_df.empty:
+            fig = px.line(
+                projection_df,
+                x='year',
+                y='co2_kg',
+                color='tree_id',
+                labels={'co2_kg': 'CO₂ Sequestered (kg)', 'year': 'Years from now'},
+                color_discrete_sequence=px.colors.sequential.Greens
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Not enough data to project CO₂ sequestration.")
+    else:
+        st.info("No CO₂ data available for projection.")
 
 def display_tree_inventory(trees_df):
     """Display a clean, professional tree inventory with view and QR code options"""
@@ -343,7 +380,7 @@ def display_tree_inventory(trees_df):
     # Updated headers to include planter name
     headers = ["Tree ID", "Local Name", "Scientific Name", "Planter", "Date Planted",
                "Status", "Height (m)", "DBH (cm)", "CO₂ (kg)", ""]
-    
+
     # Adjusted column widths
     col_widths = [1.2, 2.0, 2.0, 2.0, 1.5, 1.2, 1.0, 1.0, 1.0, 0.6]
 
@@ -374,7 +411,7 @@ def display_tree_inventory(trees_df):
     # Show tree details when selected
     if st.session_state.get('selected_tree'):
         show_tree_details(st.session_state.selected_tree, trees_df)
-        st.session_state.selected_tree = None
+        st.session_state.selected_tree = None # Reset after displaying
 
     # Generate and display QR code when selected
     if st.session_state.get('qr_tree'):
@@ -398,12 +435,12 @@ def display_tree_inventory(trees_df):
 
         # Display QR code section
         st.markdown(f"### 📌 QR Code for Tree `{tree_id}`")
-        
+
         col1, col2 = st.columns([1, 2])
         with col1:
             if qr_path:
                 st.image(qr_path, caption="Scan to open monitoring form", width=200)
-        
+
         with col2:
             st.markdown(f"""
                 **Tree Details:**
@@ -413,7 +450,7 @@ def display_tree_inventory(trees_df):
                 - **Date Planted:** {date_planted}
                 - **Status:** {tree_data.get('status', 'N/A')}
             """)
-            
+
             if qr_path:
                 with open(qr_path, "rb") as qr_file:
                     qr_bytes = qr_file.read()
@@ -427,16 +464,17 @@ def display_tree_inventory(trees_df):
 
         if st.button("Close QR Display", key="close_qr_button"):
             st.session_state.qr_tree = None
+            st.rerun()
 
 
 def show_tree_details(tree_id, trees_df):
     """Show detailed information about a specific tree (without map)"""
     tree_data = trees_df[trees_df['tree_id'] == tree_id].iloc[0]
-    
+
     st.markdown(f"### 🌿 Tree Details: `{tree_id}`")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown(f"""
             **Basic Information:**
@@ -446,7 +484,7 @@ def show_tree_details(tree_id, trees_df):
             - **Date Planted:** {tree_data.get('date_planted', 'N/A')}
             - **Status:** {tree_data.get('status', 'N/A')}
         """)
-    
+
     with col2:
         st.markdown(f"""
             **Measurements:**
@@ -455,7 +493,7 @@ def show_tree_details(tree_id, trees_df):
             - **CO₂ Sequestered:** {f"{tree_data.get('co2_kg', 0):.2f} kg" if pd.notna(tree_data.get('co2_kg')) else "N/A"}
             - **Growth Stage:** {tree_data.get('tree_stage', 'N/A')}
         """)
-    
+
     st.markdown("---")
 def unified_user_dashboard():
     """Main dashboard function displaying user's tree portfolio with metrics and analytics"""
@@ -463,19 +501,19 @@ def unified_user_dashboard():
     if "user" not in st.session_state:
         st.error("🔒 Please log in to access your dashboard")
         return
-    
+
     # Get user data
     user_data = st.session_state.user
     user_uid = user_data.get("uid")
     user_role = user_data.get("role", "")
-    user_name = user_data.get("displayName", "User")
+    user_name = user_data.get("username", "User") # Use 'username' from session_state.user
     institution_name = user_data.get("institution", "")
     tracking_number = user_data.get("treeTrackingNumber", "")
-    
+
     if not user_uid:
         st.error("⚠️ Invalid user session. Please log in again.")
         return
-    
+
     # Initialize database
     try:
         conn = sqlite3.connect(SQLITE_DB)
@@ -483,27 +521,27 @@ def unified_user_dashboard():
         st.error(f"🚨 Database connection failed: {str(e)}")
         st.error("Please try again or contact support if the problem persists.")
         return
-    
+
     # Load user profile and tree data
     with st.spinner("Loading your forest profile..."):
         try:
             # Load tree data with monitoring history
             trees = load_tree_data_by_tracking_number(tracking_number)
             monitoring_history = load_monitoring_history(tracking_number)
-            
+
             if not trees.empty and not monitoring_history.empty:
                 # Merge monitoring data with tree data
                 latest_monitoring = monitoring_history.sort_values('monitor_date').groupby('tree_id').last().reset_index()
                 trees = pd.merge(trees, latest_monitoring, on='tree_id', how='left', suffixes=('', '_monitor'))
-            
+
             metrics = calculate_tree_metrics(trees)
-            
+
         except Exception as e:
             st.error(f"Failed to load profile: {str(e)}")
             return
         finally:
             conn.close()
-    
+
     # Dashboard header with custom styling
     st.markdown(f"""
     <style>
@@ -554,13 +592,13 @@ def unified_user_dashboard():
             background-color: #166534;
         }}
     </style>
-    
+
     <div class="dashboard-header">
         <h1>{'🏫 ' + institution_name if user_role == "institution" else '👤 ' + user_name}'s Forest Dashboard</h1>
         <p>Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Display tracking information with working copy button
     st.markdown(f"""
     <div style="background-color: #f8f9fa; border-left: 4px solid #1D7749; padding: 1rem; margin-bottom: 1.5rem; border-radius: 8px;">
@@ -572,7 +610,7 @@ def unified_user_dashboard():
         <p style="font-size: 0.9rem; margin:0.2rem 0 0 0; color: #666;">Use this number to track your environmental impact</p>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Display key metrics at the top
     cols = st.columns(4)
     with cols[0]:
@@ -583,7 +621,7 @@ def unified_user_dashboard():
             <div style="font-size: 0.8rem; color: #666;">{'🌳' * min(metrics['total_trees'], 5)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with cols[1]:
         st.markdown(f"""
         <div class="metric-card">
@@ -592,7 +630,7 @@ def unified_user_dashboard():
             <div style="font-size: 0.8rem; color: #666;">Top: {list(metrics['species_count'].keys())[0] if metrics['species_count'] else 'N/A'}</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with cols[2]:
         st.markdown(f"""
         <div class="metric-card">
@@ -601,7 +639,7 @@ def unified_user_dashboard():
             <div style="font-size: 0.8rem; color: #666;">≈ {int(metrics['total_co2_absorbed']/22):,} km car travel</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with cols[3]:
         health_score = calculate_health_score(metrics['health_status'])
         health_color = "#28a745" if health_score > 75 else "#ffc107" if health_score > 50 else "#dc3545"
@@ -612,19 +650,19 @@ def unified_user_dashboard():
             <div style="font-size: 0.8rem; color: #666;">{'🌿' * (health_score//20)}</div>
         </div>
         """, unsafe_allow_html=True)
-    
+
     # Main dashboard tabs
-    tab1, tab2, tab3 = st.tabs(["🌿 Forest Overview", "📈 Growth Analytics", "🌳 Tree Inventory"])
-    
+    tab1, tab2, tab3, tab4 = st.tabs(["🌿 Forest Overview", "📈 Growth Analytics", "🌳 Tree Inventory", "🛡 Field Agent Access"])
+
     with tab1:  # Forest Overview
         display_forest_overview(trees, metrics)
-        
+
     with tab2:  # Growth Analytics
         display_growth_analytics(trees, monitoring_history)
-        
+
     with tab3:  # Tree Inventory
         st.subheader("🌳 Your Tree Inventory")
-        
+
         if trees.empty:
             st.info("No trees found in your account yet.")
         else:
@@ -641,9 +679,17 @@ def unified_user_dashboard():
                     key='download_trees_csv',
                     help="Download all your tree data as a CSV file"
                 )
-            
+
             # Display the tree table
             display_tree_inventory(trees)
+
+    with tab4: # Field Agent Credential Management
+        st.subheader("🛡 Generate Field Agent Password")
+        if tracking_number:
+            manage_field_agent_credentials(tracking_number, user_name)
+        else:
+            st.info("Your account does not have a tree tracking number associated. Please contact an administrator to set one up to manage field agent credentials.")
+
 
 def unified_user_dashboard_content():
     """Entry point for Streamlit"""
@@ -663,7 +709,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const copyButtons = document.querySelectorAll('.copy-btn');
     copyButtons.forEach(btn => {
         btn.addEventListener('click', function() {
-            const text = this.getAttribute('data-text') || '{tracking_number}';
+            const text = this.getAttribute('data-text') || '{tracking_number}'; // Fallback text
             copyToClipboard(text);
             // Visual feedback
             const originalText = this.textContent;
@@ -676,3 +722,68 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 """, unsafe_allow_html=True)
+
+
+def generate_field_password(name):
+    prefix = ''.join([c for c in name.upper() if c.isalpha()])[:3]
+    number = str(random.randint(1000, 9999)) # Changed to 4 digits for better randomness
+    return prefix + number
+
+def manage_field_agent_credentials(tracking_number, user_name):
+    st.subheader("🛡 Generate Field Agent Password")
+    conn = sqlite3.connect(SQLITE_DB)
+    c = conn.cursor()
+
+    # Check if credentials exist for this tracking_number
+    c.execute("SELECT field_password, token_created_at FROM users WHERE tree_tracking_number = ?", (tracking_number,))
+    result = c.fetchone()
+
+    now = int(time.time())
+
+    if result:
+        password, created_at = result
+        remaining_time_seconds = max(0, 86400 - (now - created_at))
+        hours = remaining_time_seconds // 3600
+        minutes = (remaining_time_seconds % 3600) // 60
+
+        st.success(f"🔑 Field Password: `{password}` (expires in {hours} hrs {minutes} mins)")
+        if st.button("🔄 Regenerate Password", key="regenerate_fa_pass"):
+            new_pass = generate_field_password(user_name)
+            c.execute("""
+                UPDATE users SET field_password = ?, token_created_at = ?
+                WHERE tree_tracking_number = ?
+            """, (new_pass, now, tracking_number))
+            conn.commit()
+            st.success(f"✅ New Password Generated: `{new_pass}` (valid 24 hrs)")
+            st.rerun() # Rerun to update the display immediately
+    else:
+        st.info("No field password found for this tracking number. Generate one below.")
+        if st.button("➕ Generate New Password", key="generate_new_fa_pass"):
+            new_pass = generate_field_password(user_name)
+            # Check if a user record with this tracking_number already exists
+            c.execute("SELECT COUNT(*) FROM users WHERE tree_tracking_number = ?", (tracking_number,))
+            user_exists = c.fetchone()[0] > 0
+
+            if user_exists:
+                # If a record exists, update it
+                c.execute("""
+                    UPDATE users SET field_password = ?, token_created_at = ?
+                    WHERE tree_tracking_number = ?
+                """, (new_pass, now, tracking_number))
+            else:
+                # If no record exists for this tracking_number, insert a new one.
+                # This assumes the 'users' table can have entries solely for field agent credentials,
+                # potentially without full Firebase UID/email if they are not regular users.
+                # We'll use the tracking number as a fallback for name/email if the user_name is generic.
+                user_email_for_db = st.session_state.get('user', {}).get('email', f"field_agent_{tracking_number}@carbontally.com")
+                user_display_name_for_db = st.session_state.get('user', {}).get('username', f"Field Agent {tracking_number}")
+
+                c.execute("""
+                    INSERT INTO users (name, email, tree_tracking_number, field_password, token_created_at, role, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (user_display_name_for_db, user_email_for_db, tracking_number, new_pass, now, 'field_agent', 'approved')) # Assign 'field_agent' role
+
+            conn.commit()
+            st.success(f"✅ Password Created: `{new_pass}` (valid 24 hrs)")
+            st.rerun()
+    conn.close()
