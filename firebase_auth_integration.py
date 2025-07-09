@@ -276,7 +276,7 @@ def generate_password_reset_link(email):
             android_package_name=None,  # Set for Android apps
             android_minimum_version=None,  # Set for Android apps
             android_install_app=None,  # Set for Android apps
-            ios_bundle_id=None  # Set for iOS apps
+            iOS_bundle_id=None  # Set for iOS apps
         )
         
         # Generate password reset link
