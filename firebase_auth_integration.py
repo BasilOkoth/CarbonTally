@@ -5,7 +5,7 @@ from firebase_admin import credentials, auth, firestore
 from firebase_admin import exceptions
 from firebase_admin.exceptions import FirebaseError
 import uuid
-import datetime
+from datetime import datetime
 import re
 import json
 import smtplib
@@ -17,15 +17,100 @@ import sqlite3
 import pandas as pd
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Configuration
 BASE_DIR = Path(__file__).parent if "__file__" in locals() else Path.cwd()
 DATA_DIR = BASE_DIR / "data"
-SQLITE_DB = DATA_DIR / "trees.db"
+DATA_DIR.mkdir(exist_ok=True, parents=True)
+BASE_DIR = Path(__file__).parent
+SQLITE_DB = BASE_DIR / 'data' / 'trees.db'
 
-# Email Templates (aligned with app.py)
+def get_db_connection():
+    return sqlite3.connect(str(SQLITE_DB))
+
+def init_sql_tables():
+    conn = None
+    try:
+        SQLITE_DB.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(SQLITE_DB))
+        c = conn.cursor()
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uid TEXT UNIQUE,
+                fullName TEXT,
+                email TEXT UNIQUE,
+                institution TEXT,
+                role TEXT DEFAULT 'individual',
+                status TEXT DEFAULT 'pending',
+                treeTrackingNumber TEXT UNIQUE,
+                createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                approvedAt TEXT,
+                field_password TEXT,
+                token_created_at INTEGER,
+                firebase_doc_id TEXT,
+                last_sync_time TEXT,
+                approved INTEGER DEFAULT 0
+            );
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pending_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fullName TEXT,
+                email TEXT UNIQUE,
+                uid TEXT UNIQUE,
+                role TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS institutions (
+                id TEXT PRIMARY KEY,
+                fullName TEXT,
+                join_date TEXT
+            );
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS trees (
+                tree_id TEXT PRIMARY KEY,
+                scientific_name TEXT,
+                local_name TEXT,
+                latitude REAL,
+                longitude REAL,
+                planters_name TEXT,
+                treeTrackingNumber TEXT UNIQUE,
+                dbh_cm REAL,
+                height_m REAL,
+                co2_kg REAL,
+                rcd_cm REAL,
+                institution TEXT,
+                date_planted TEXT,
+                status TEXT,
+                last_monitored_at TEXT
+            );
+        """)
+
+        conn.commit()
+        print("✅ SQLite tables initialized successfully.")
+    except Exception as e:
+        logger.error(f"Error initializing SQL tables: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+# Initialize tables on import
+init_sql_tables()
+
+# Email Templates (same as before)
+# Email Templates
 EMAIL_TEMPLATES = {
     "approval": {
         "subject": "CarbonTally - Your Account Has Been Approved",
@@ -101,71 +186,135 @@ EMAIL_TEMPLATES = {
         """
     }
 }
-
 def initialize_firebase():
-    """Initialize Firebase Admin SDK if not already initialized"""
-    try:
-        if not firebase_admin._apps:
-            try:
-                # Load Firebase config from Streamlit secrets
-                firebase_config = {
-                    "type": st.secrets["FIREBASE_CONFIG"]["type"],
-                    "project_id": st.secrets["FIREBASE_CONFIG"]["project_id"],
-                    "private_key_id": st.secrets["FIREBASE_CONFIG"]["private_key_id"],
-                    "private_key": st.secrets["FIREBASE_CONFIG"]["private_key"].replace('\\n', '\n'),
-                    "client_email": st.secrets["FIREBASE_CONFIG"]["client_email"],
-                    "client_id": st.secrets["FIREBASE_CONFIG"]["client_id"],
-                    "auth_uri": st.secrets["FIREBASE_CONFIG"]["auth_uri"],
-                    "token_uri": st.secrets["FIREBASE_CONFIG"]["token_uri"],
-                    "auth_provider_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["auth_provider_x509_cert_url"],
-                    "client_x509_cert_url": st.secrets["FIREBASE_CONFIG"]["client_x509_cert_url"]
-                }
-            except Exception as e:
-                st.error(f"Error loading Firebase configuration: {str(e)}")
-                show_firebase_setup_guide()
-                return None
-
-            # Initialize Firebase app
-            cred = credentials.Certificate(firebase_config)
-            firebase_admin.initialize_app(cred)
-
-        # Initialize Firestore
-        db = firestore.client()
-
-        # Cache in session state
+    """Initialize Firebase Admin SDK from Streamlit secrets"""
+    if firebase_admin._apps:
         if 'firebase_db' not in st.session_state:
-            st.session_state.firebase_db = db
+            st.session_state.firebase_db = firestore.client()
+        return st.session_state.firebase_db
 
+    try:
+        config = st.secrets["FIREBASE_CONFIG"]
+        firebase_config = {
+            "type": config["type"],
+            "project_id": config["project_id"],
+            "private_key_id": config["private_key_id"],
+            "private_key": config["private_key"].replace("\\n", "\n"),
+            "client_email": config["client_email"],
+            "client_id": config["client_id"],
+            "auth_uri": config["auth_uri"],
+            "token_uri": config["token_uri"],
+            "auth_provider_x509_cert_url": config["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": config["client_x509_cert_url"]
+        }
+
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        st.session_state.firebase_db = db
         return db
-
     except Exception as e:
-        st.error(f"Firebase initialization failed: {str(e)}")
+        st.error(f"Firebase initialization failed: {e}")
         show_firebase_setup_guide()
         return None
 
-def add_institution_to_db(firebase_uid: str, full_name: str):
-    """Adds a new participant record to the SQLite database."""
-    conn = None
+def add_to_pending_users(uid, user_data):
+    """Add new user application to pending_users table"""
+    conn = get_db_connection()
     try:
-        conn = sqlite3.connect(SQLITE_DB)
         c = conn.cursor()
-        join_date = datetime.date.today().isoformat()
-        c.execute("INSERT INTO institutions (id, name, join_date) VALUES (?, ?, ?)",
-                 (firebase_uid, full_name, join_date))
+        c.execute("""
+            INSERT INTO pending_users (fullName, email, uid, role)
+            VALUES (?, ?, ?, ?)
+        """, (
+            user_data.get('fullName', ''),
+            user_data.get('email', ''),
+            uid,
+            user_data.get('role', 'individual')
+        ))
         conn.commit()
-        logger.info(f"Participant '{full_name}' ({firebase_uid}) added to institutions table")
-    except sqlite3.IntegrityError:
-        logger.warning(f"Participant with ID {firebase_uid} already exists in institutions table")
+        return True
     except Exception as e:
-        logger.error(f"Error adding participant '{full_name}' to institutions database: {e}")
+        logger.error(f"Error adding to pending users: {e}")
+        return False
     finally:
-        if conn:
-            conn.close()
+        conn.close()
+
+def sync_user_to_sql(uid, user_data):
+    """Sync approved user data from Firestore to SQL database"""
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        
+        created_at = user_data.get('createdAt')
+        if isinstance(created_at, datetime):
+            created_at = created_at.strftime('%Y-%m-%d %H:%M:%S')
+        
+        c.execute("SELECT 1 FROM users WHERE uid = ?", (uid,))
+        exists = c.fetchone() is not None
+        
+        if exists:
+            c.execute("""
+                UPDATE users SET 
+                    fullName = ?,
+                    email = ?,
+                    role = ?,
+                    status = ?,
+                    treeTrackingNumber = ?,
+                    createdAt = ?,
+                    approvedAt = CASE WHEN ? = 'approved' THEN 
+                        COALESCE(approvedAt, CURRENT_TIMESTAMP)
+                    ELSE approvedAt END,
+                    firebase_doc_id = ?,
+                    last_sync_time = ?,
+                    approved = ?
+                WHERE uid = ?
+            """, (
+                user_data.get('fullName', ''),
+                user_data.get('email', ''),
+                user_data.get('role', 'individual'),
+                user_data.get('status', 'pending'),
+                user_data.get('treeTrackingNumber', ''),
+                created_at,
+                user_data.get('status', 'pending'),
+                user_data.get('firebase_doc_id', ''),
+                datetime.utcnow().isoformat(),
+                user_data.get('approved', 0),
+                uid
+            ))
+        else:
+            c.execute("""
+                INSERT INTO users (
+                    fullName, email, uid, role, status, 
+                    treeTrackingNumber, createdAt, approvedAt,
+                    firebase_doc_id, last_sync_time, approved
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_data.get('fullName', ''),
+                user_data.get('email', ''),
+                uid,
+                user_data.get('role', 'individual'),
+                user_data.get('status', 'pending'),
+                user_data.get('treeTrackingNumber', ''),
+                created_at,
+                user_data.get('approvedAt') if user_data.get('status') == 'approved' else None,
+                user_data.get('firebase_doc_id', ''),
+                datetime.utcnow().isoformat(),
+                user_data.get('approved', 0)
+            ))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error syncing user {uid} to SQL: {e}")
+        return False
+    finally:
+        conn.close()
 
 def send_email(recipient_email, subject, html_content):
     """Send an email using SMTP settings from secrets.toml"""
     try:
-        # Get SMTP settings from secrets.toml
         smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
         smtp_port = int(st.secrets.get("SMTP_PORT", 587))
         smtp_username = st.secrets.get("SMTP_USERNAME", "")
@@ -176,17 +325,14 @@ def send_email(recipient_email, subject, html_content):
             logger.warning("SMTP credentials not found in secrets.toml. Email not sent.")
             return False
             
-        # Create message
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
         message["From"] = sender_email
         message["To"] = recipient_email
         
-        # Attach HTML content
         html_part = MIMEText(html_content, "html")
         message.attach(html_part)
         
-        # Send email
         with smtplib.SMTP(smtp_server, smtp_port) as server:
             server.starttls()
             server.login(smtp_username, smtp_password)
@@ -194,7 +340,6 @@ def send_email(recipient_email, subject, html_content):
             
         logger.info(f"Email sent successfully to {recipient_email}")
         return True
-        
     except Exception as e:
         logger.error(f"Failed to send email: {str(e)}")
         return False
@@ -205,11 +350,8 @@ def send_approval_email(user_data):
         recipient_email = user_data.get("email")
         full_name = user_data.get("fullName", "User")
         tracking_number = user_data.get("treeTrackingNumber", "")
-        
-        # Get app URL from secrets or use default
         app_url = st.secrets.get("APP_URL", "https://carbontally.app")
         
-        # Format email template
         template = EMAIL_TEMPLATES["approval"]
         subject = template["subject"]
         body = template["body"].format(
@@ -218,9 +360,7 @@ def send_approval_email(user_data):
             app_url=app_url
         )
         
-        # Send email
         return send_email(recipient_email, subject, body)
-        
     except Exception as e:
         logger.error(f"Failed to send approval email: {str(e)}")
         return False
@@ -231,55 +371,30 @@ def send_rejection_email(user_data):
         recipient_email = user_data.get("email")
         full_name = user_data.get("fullName", "User")
         
-        # Format email template
         template = EMAIL_TEMPLATES["rejection"]
         subject = template["subject"]
         body = template["body"].format(fullName=full_name)
         
-        # Send email
         return send_email(recipient_email, subject, body)
-        
     except Exception as e:
         logger.error(f"Failed to send rejection email: {str(e)}")
         return False
 
-import requests
-
-import requests
-
-def send_password_reset_email(email):
-    """Send a Firebase password reset email using the Web API"""
-    api_key = st.secrets["FIREBASE_WEB_API_KEY"]
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}"
-    
-    data = {
-        "requestType": "PASSWORD_RESET",
-        "email": email
-    }
-    
-    response = requests.post(url, json=data)
-    if response.status_code == 200:
-        return True
-    else:
-        raise Exception(response.json().get("error", {}).get("message", "Failed to send reset link."))
 def generate_password_reset_link(email):
-    """Generate a password reset link using Firebase Auth with proper settings"""
+    """Generate a password reset link using Firebase Auth"""
     try:
-        # Get app URL from secrets or use default
         app_url = st.secrets.get("APP_URL", "https://your-app-url.com")
         
-        # Generate action code settings
         action_code_settings = auth.ActionCodeSettings(
-            url=f"{app_url}/reset-password",  # Your password reset handler URL
-            handle_code_in_app=False,  # Set to True if handling in mobile app
-            dynamic_link_domain=None,  # Set if using Firebase Dynamic Links
-            android_package_name=None,  # Set for Android apps
-            android_minimum_version=None,  # Set for Android apps
-            android_install_app=None,  # Set for Android apps
-            iOS_bundle_id=None  # Set for iOS apps
+            url=f"{app_url}/reset-password",
+            handle_code_in_app=False,
+            dynamic_link_domain=None,
+            android_package_name=None,
+            android_minimum_version=None,
+            android_install_app=None,
+            iOS_bundle_id=None
         )
         
-        # Generate password reset link
         reset_link = auth.generate_password_reset_link(
             email, 
             action_code_settings=action_code_settings
@@ -287,13 +402,13 @@ def generate_password_reset_link(email):
         
         logger.info(f"Generated password reset link for {email}")
         return reset_link
-        
     except auth.UserNotFoundError:
         logger.warning(f"Password reset requested for non-existent user: {email}")
         return None
     except Exception as e:
         logger.error(f"Error generating password reset link: {str(e)}")
         return None
+
 def firebase_login_ui():
     """Display Firebase login UI and handle authentication"""
     st.markdown("<h3 style='text-align: center; color: #1D7749;'>Login to Your Account</h3>", unsafe_allow_html=True)
@@ -316,12 +431,10 @@ def firebase_login_ui():
                     if user_doc.exists:
                         user_data = user_doc.to_dict()
                         
-                        # Check if user is approved
                         if user_data.get('status') != 'approved':
                             st.error("Your account is pending approval. Please wait for admin approval.")
                             return
                         
-                        # Store ALL required user data in session state
                         st.session_state.user = {
                             'uid': user_record.uid,
                             'email': user_record.email,
@@ -335,7 +448,6 @@ def firebase_login_ui():
                         
                         st.session_state.authenticated = True
                         
-                        # Set appropriate page based on role
                         if user_data.get('role') == 'admin':
                             st.session_state.page = "Admin Dashboard"
                         else:
@@ -356,7 +468,8 @@ def firebase_signup_ui():
 
     with st.form("firebase_signup_form"):
         email = st.text_input("Email", key="signup_email")
-        password = st.text_input("Password", type="password", key="signup_password")
+        password = st.text_input("Password", type="password", key="signup_password", 
+                               help="Password must be at least 6 characters long")
         confirm_password = st.text_input("Confirm Password", type="password", key="signup_confirm_password")
         full_name = st.text_input("Full Name", key="signup_full_name")
         user_type = st.selectbox("Account Type", options=["individual", "institution"], key="signup_user_type")
@@ -377,13 +490,9 @@ def firebase_signup_ui():
                 st.warning("Please enter institution name for institution account type.")
             else:
                 try:
-                    # Create user in Firebase Authentication
                     user = auth.create_user(email=email, password=password)
-                    
-                    # Generate a unique tree tracking number
                     tree_tracking_number = f"CT-{uuid.uuid4().hex[:8].upper()}"
 
-                    # Save user data to Firestore with pending status
                     db = st.session_state.firebase_db
                     user_ref = db.collection('users').document(user.uid)
                     user_data = {
@@ -398,17 +507,13 @@ def firebase_signup_ui():
                         user_data['institution'] = institution_name
                     
                     user_ref.set(user_data)
-
-                    # Add user to the SQLite 'institutions' table for landing page count
-                    if user_type in ['individual', 'institution']:
-                        add_institution_to_db(user.uid, full_name)
+                    add_to_pending_users(user.uid, user_data)
 
                     st.success("Account created successfully! Your account is pending admin approval. You will receive an email once approved.")
                     logger.info(f"New user registered: {email} (UID: {user.uid})")
-                    time.sleep(5)
+                    time.sleep(3)
                     st.session_state.page = "Login"
                     st.rerun()
-
                 except exceptions.FirebaseError as e:
                     if "EMAIL_EXISTS" in str(e):
                         st.error("This email is already registered.")
@@ -433,18 +538,12 @@ def firebase_password_recovery_ui():
             else:
                 with st.spinner("Sending password reset email..."):
                     try:
-                        # Step 1: Generate reset link
                         reset_link = generate_password_reset_link(email)
-
                         if reset_link:
-                            # Step 2: Format email content using the HTML template
                             template = EMAIL_TEMPLATES["password_reset"]
                             subject = template["subject"]
                             html_body = template["body"].format(reset_link=reset_link)
-
-                            # Step 3: Send the email
                             sent = send_email(email, subject, html_body)
-
                             if sent:
                                 st.success("Password reset link sent! Please check your inbox (and spam folder).")
                             else:
@@ -453,94 +552,230 @@ def firebase_password_recovery_ui():
                             st.error("No user found with that email or failed to generate reset link.")
                     except Exception as e:
                         st.error(f"An error occurred: {str(e)}")
+
 def firebase_admin_approval_ui():
-    """Display UI for admin to approve/reject pending user accounts"""
+    """Enhanced admin approval UI with search and filtering"""
     st.markdown("<h3 style='text-align: center; color: #1D7749;'>Admin User Approval</h3>", unsafe_allow_html=True)
-
-    db = initialize_firebase()
-    if not db:
-        st.error("Firebase not initialized. Cannot load pending users.")
-        return
-
-    pending_users_ref = db.collection('users').where('status', '==', 'pending')
-    pending_users = pending_users_ref.stream()
-
-    pending_users_list = []
-    for user_doc in pending_users:
-        user_data = user_doc.to_dict()
-        user_data['uid'] = user_doc.id
-        pending_users_list.append(user_data)
-
-    if not pending_users_list:
+    
+    # Search and filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        search_term = st.text_input("Search by name or email")
+    with col2:
+        role_filter = st.selectbox("Filter by role", ["All", "individual", "institution"])
+    
+    # Get pending users
+    pending_users = get_pending_users()
+    
+    if not pending_users:
         st.info("No pending user accounts for approval.")
         return
-
-    st.write(f"Found {len(pending_users_list)} pending user(s).")
-
-    for user_data in pending_users_list:
-        with st.expander(f"Pending User: {user_data.get('fullName', 'N/A')} ({user_data.get('email', 'N/A')})"):
-            st.write(f"**Email:** {user_data.get('email')}")
-            st.write(f"**Full Name:** {user_data.get('fullName')}")
-            st.write(f"**Account Type:** {user_data.get('role')}")
-            if user_data.get('role') == 'institution':
-                st.write(f"**Institution:** {user_data.get('institution')}")
-            st.write(f"**Tree Tracking Number:** {user_data.get('treeTrackingNumber', 'N/A')}")
-            st.write(f"**Registered At:** {user_data.get('createdAt').strftime('%Y-%m-%d %H:%M:%S') if user_data.get('createdAt') else 'N/A'}")
-
-            col1, col2 = st.columns(2)
+    
+    # Apply filters
+    if search_term:
+        pending_users = [u for u in pending_users 
+                        if search_term.lower() in u.get('email', '').lower() 
+                        or search_term.lower() in u.get('fullName', '').lower()]
+    
+    if role_filter != "All":
+        pending_users = [u for u in pending_users if u.get('role') == role_filter]
+    
+    if not pending_users:
+        st.info("No users match your search criteria.")
+        return
+    
+    st.write(f"Found {len(pending_users)} pending user(s).")
+    
+    # Display users in a table with checkboxes for batch actions
+    selected_users = []
+    with st.form("batch_approval_form"):
+        for user in pending_users:
+            col1, col2 = st.columns([1, 5])
             with col1:
-                if st.button(f"Approve {user_data['email']}", key=f"approve_{user_data['uid']}", use_container_width=True):
-                    try:
-                        db.collection('users').document(user_data['uid']).update({'status': 'approved'})
-                        send_approval_email(user_data)
-                        st.success(f"User {user_data['email']} approved and email sent.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error approving user: {e}")
+                selected = st.checkbox(f"Select {user['email']}", key=f"select_{user['uid']}")
+                if selected:
+                    selected_users.append(user['uid'])
             with col2:
-                if st.button(f"Reject {user_data['email']}", key=f"reject_{user_data['uid']}", use_container_width=True):
-                    try:
-                        auth.delete_user(user_data['uid'])
-                        db.collection('users').document(user_data['uid']).delete()
-                        send_rejection_email(user_data)
-                        st.warning(f"User {user_data['email']} rejected and account deleted.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error rejecting user: {e}")
-from firebase_admin import auth, firestore
+                st.write(f"**Name:** {user.get('fullName', 'N/A')}")
+                st.write(f"**Email:** {user.get('email', 'N/A')}")
+                st.write(f"**Role:** {user.get('role', 'N/A')}")
+                st.write("---")
+        
+        batch_action = st.selectbox("Batch action", ["Approve selected", "Reject selected"])
+        submitted = st.form_submit_button("Apply batch action")
+        
+        if submitted and selected_users:
+            if batch_action == "Approve selected":
+                success_count = 0
+                for uid in selected_users:
+                    if approve_user(uid):
+                        success_count += 1
+                st.success(f"Successfully approved {success_count} users!")
+            else:
+                success_count = 0
+                for uid in selected_users:
+                    if reject_user(uid):
+                        success_count += 1
+                st.success(f"Successfully rejected {success_count} users!")
+            st.rerun()
+
+def approve_user(uid):
+    """Approve user in both Firebase and SQL database"""
+    try:
+        db = initialize_firebase()
+        if not db:
+            return False
+
+        user_ref = db.collection('users').document(uid)
+        user_data = user_ref.get().to_dict()
+        
+        if not user_data:
+            st.error("User not found in Firestore")
+            return False
+
+        # Update in Firestore
+        user_ref.update({
+            'status': 'approved',
+            'approved': True,
+            'approvedAt': firestore.SERVER_TIMESTAMP
+        })
+
+        # Sync to SQL
+        user_data['status'] = 'approved'
+        user_data['approved'] = True
+        if not sync_user_to_sql(uid, user_data):
+            st.error("Failed to sync user to SQL database")
+            return False
+
+        # Remove from pending users
+        conn = get_db_connection()
+        try:
+            conn.execute("DELETE FROM pending_users WHERE uid = ?", (uid,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error removing from pending_users: {e}")
+        finally:
+            conn.close()
+
+        # Send approval email
+        send_approval_email(user_data)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error approving user: {e}")
+        return False
+
+def reject_user(uid):
+    """Reject user and delete from all systems"""
+    try:
+        # Get user email before deleting for notification
+        db = initialize_firebase()
+        user_data = db.collection('users').document(uid).get().to_dict()
+        
+        # Delete from Firebase Auth
+        auth.delete_user(uid)
+        
+        # Delete from Firestore
+        if db:
+            db.collection('users').document(uid).delete()
+        
+        # Delete from SQL databases
+        conn = get_db_connection()
+        try:
+            conn.execute("DELETE FROM users WHERE uid = ?", (uid,))
+            conn.execute("DELETE FROM pending_users WHERE uid = ?", (uid,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error deleting user from SQL: {e}")
+        finally:
+            conn.close()
+        
+        # Send rejection email
+        if user_data:
+            send_rejection_email(user_data)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error rejecting user: {e}")
+        return False
+
+def save_field_agent_credentials(uid, email, field_password, token_created_at):
+    """Save field agent credentials to database"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("SELECT uid FROM users WHERE email = ?", (email,))
+        existing_user_uid = cursor.fetchone()
+
+        if existing_user_uid:
+            cursor.execute("""
+                UPDATE users
+                SET
+                    field_password = ?,
+                    token_created_at = ?
+                WHERE email = ?
+            """, (
+                field_password,
+                token_created_at,
+                email
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO users (uid, email, fullName, role, status, treeTrackingNumber, field_password, token_created_at, createdAt, approvedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                uid,
+                email,
+                "Field Agent",
+                "agent",
+                "approved",
+                f"AGENT-{str(uuid.uuid4())[:8].upper()}",
+                field_password,
+                token_created_at,
+                time.strftime('%Y-%m-%d %H:%M:%S'),
+                time.strftime('%Y-%m-%d %H:%M:%S')
+            ))
+
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error saving field agent credentials: {e}")
+        return False
+    finally:
+        conn.close()
 
 def get_all_users():
-    """Fetch all users and their Firestore profile data."""
-    db = firestore.client()
-    user_docs = db.collection("users").stream()
-    users = []
-
-    for doc in user_docs:
-        data = doc.to_dict()
-        data["uid"] = doc.id
-        users.append(data)
-
-    return users
-
-def approve_user(uid: str):
-    """Mark user as approved in Firestore."""
-    db = firestore.client()
-    db.collection("users").document(uid).update({"status": "approved", "approved": True})
-
-def reject_user(uid: str):
-    """Mark user as rejected in Firestore."""
-    db = firestore.client()
-    db.collection("users").document(uid).update({"status": "rejected", "approved": False})
-
-def delete_user(uid: str):
-    """Delete user from Firebase Auth and Firestore."""
-    db = firestore.client()
+    """Return all users from SQLite as a list of dicts, most recent first."""
+    conn = None
     try:
-        auth.delete_user(uid)
+        conn = get_db_connection()
+        df = pd.read_sql_query(
+            """
+            SELECT
+                uid,
+                fullName,
+                email,
+                role,
+                status,
+                createdAt,
+                approvedAt,
+                treeTrackingNumber
+            FROM users
+            ORDER BY datetime(createdAt) DESC;
+            """,
+            conn
+        )
+        return df.to_dict('records')
     except Exception as e:
-        print(f"Warning: Unable to delete from Firebase Auth: {e}")
-
-    db.collection("users").document(uid).delete()
+        logger.error(f"Error getting all users: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
 
 def firebase_logout():
     """Handle Firebase user logout"""
@@ -563,6 +798,131 @@ def check_firebase_user_role(user, role):
         return user['role'] == role
     return False
 
+def get_pending_users():
+    """Get all pending users from the database"""
+    conn = get_db_connection()
+    try:
+        return pd.read_sql_query("SELECT * FROM pending_users", conn).to_dict('records')
+    except Exception as e:
+        logger.error(f"Error loading pending users: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_approved_users():
+    """Get all approved users from the database"""
+    conn = get_db_connection()
+    try:
+        return pd.read_sql_query("SELECT * FROM users WHERE status = 'approved'", conn).to_dict('records')
+    except Exception as e:
+        logger.error(f"Error loading approved users: {e}")
+        return []
+    finally:
+        conn.close()
+
+def sync_users_from_firestore():
+    """Sync users from Firestore to SQL database"""
+    db = firestore.client()
+    users_ref = db.collection("users")
+    docs = users_ref.stream()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+        uid = str(data.get("uid", doc.id))
+        fullName = str(data.get("fullName", ""))
+        email = str(data.get("email", ""))
+        role = str(data.get("role", "individual"))
+        status = str(data.get("status", "pending"))
+        tracking = data.get("treeTrackingNumber", "")
+        tracking = "" if tracking is None else str(tracking)
+
+        created_at = data.get("createdAt")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+        else:
+            created_at = str(created_at or datetime.utcnow().isoformat())
+
+        approved_at = data.get("approvedAt")
+        if hasattr(approved_at, "isoformat"):
+            approved_at = approved_at.isoformat()
+        else:
+            approved_at = str(approved_at) if approved_at is not None else None
+
+        firebase_doc_id = str(doc.id)
+        last_sync_time = datetime.utcnow().isoformat()
+
+        try:
+            cursor.execute("""
+                INSERT INTO users (
+                    uid, fullName, email, role, status,
+                    treeTrackingNumber, createdAt, approvedAt,
+                    firebase_doc_id, last_sync_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                uid, fullName, email, role, status,
+                tracking, created_at, approved_at,
+                firebase_doc_id, last_sync_time
+            ))
+        except sqlite3.IntegrityError:
+            cursor.execute("""
+                UPDATE users SET
+                    fullName = ?,
+                    email = ?,
+                    role = ?,
+                    status = ?,
+                    treeTrackingNumber = ?,
+                    createdAt = ?,
+                    approvedAt = ?,
+                    last_sync_time = ?
+                WHERE uid = ?
+            """, (
+                fullName, email, role, status,
+                tracking, created_at, approved_at,
+                last_sync_time,
+                uid
+            ))
+
+    conn.commit()
+    conn.close()
+    logger.info("✅ Firebase → SQLite sync complete.")
+
+def sync_users():
+    """Wrapper function to maintain compatibility"""
+    sync_users_from_firestore()
+def delete_user(uid: str):
+    """Delete user from Firebase Auth and Firestore."""
+    try:
+        # Delete from Firebase Authentication
+        auth.delete_user(uid)
+        
+        # Delete from Firestore
+        db = initialize_firebase()
+        if db:
+            db.collection('users').document(uid).delete()
+        
+        # Delete from SQL database
+        conn = get_db_connection()
+        try:
+            conn.execute("DELETE FROM users WHERE uid = ?", (uid,))
+            conn.execute("DELETE FROM pending_users WHERE uid = ?", (uid,))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error deleting user from SQL: {e}")
+            return False
+        finally:
+            conn.close()
+            
+    except auth.UserNotFoundError:
+        logger.warning(f"User {uid} not found in Firebase Auth")
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting user {uid}: {e}")
+        return False
 def show_firebase_setup_guide():
     """Display instructions for setting up Firebase"""
     st.markdown("""
@@ -578,21 +938,3 @@ def show_firebase_setup_guide():
     For detailed instructions, see the [Firebase documentation](https://firebase.google.com/docs/admin/setup)
     """)
     st.stop()
-
-if __name__ == "__main__":
-    st.set_page_config(page_title="Firebase Auth Test", layout="centered")
-    st.title("Firebase Authentication Test")
-    
-    if 'firebase_db' not in st.session_state:
-        initialize_firebase()
-    
-    menu = st.sidebar.selectbox("Menu", ["Login", "Sign Up", "Password Recovery", "Admin Approval"])
-    
-    if menu == "Login":
-        firebase_login_ui()
-    elif menu == "Sign Up":
-        firebase_signup_ui()
-    elif menu == "Password Recovery":
-        firebase_password_recovery_ui()
-    elif menu == "Admin Approval":
-        firebase_admin_approval_ui()
