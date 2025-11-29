@@ -3,7 +3,7 @@ from shapely.geometry import Point
 
 # === Load FAO Ecological Zones ===
 GEZ_SHAPEFILE_PATH = os.path.join("data", "gez2010", "gez_2010_wgs84.shp")
-FAO_ECOZONES_GDF = gpd.read_file(GEZ_SHAPEFILE_PATH)
+#FAO_ECOZONES_GDF = gpd.read_file(GEZ_SHAPEFILE_PATH)
 
 # === Load Species-Specific Allometric Coefficients ===
 SPECIES_CSV_PATH = os.path.join("data", "species_allometrics.csv")
