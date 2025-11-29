@@ -16,3 +16,4 @@ paypalrestsdk
 seaborn
 pyperclip
 streamlit-js-eval
+shapely
