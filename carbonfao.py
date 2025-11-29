@@ -1,5 +1,4 @@
 import os
-import pandas as pd
 from shapely.geometry import Point
 
 # === Load FAO Ecological Zones ===
